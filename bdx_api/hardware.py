@@ -7,6 +7,7 @@ import threading
 import atexit
 import numpy as np
 import can
+import serial
 
 from bdx_api.config import load_policy_config, STANDUP_GAINS
 from bdx_api.interface import RobotBackend
@@ -52,10 +53,6 @@ MUX_ENABLE = 0x03
 MUX_DISABLE = 0x04
 HOST_ID = 0xFD
 
-I2C_BUS = 7
-CALIBRATION_SAMPLES = 100
-READ_FREQUENCY = 100.0
-
 def _scale_to_u16(value, v_min, v_max):
     return int(65535.0 * (np.clip(value, v_min, v_max) - v_min) / (v_max - v_min))
 
@@ -83,124 +80,93 @@ def _flush_bus(bus):
 
 
 # ==========================================
-# BNO055 IMU
+# Xsens MTi-3 IMU
 # ==========================================
 
-class BNO055_IMU:
-    def __init__(self, i2c_bus_num=I2C_BUS, calibration_samples=CALIBRATION_SAMPLES, frequency=READ_FREQUENCY):
-        self.i2c_bus_num = i2c_bus_num
-        self.calibration_samples = calibration_samples
-        self.frequency = frequency
-        self.sensor = None
-        self.gyro_offset = np.zeros(3)
-        self.gravity_correction = None
-        self.running = False
-        self.thread = None
-        self.lock = threading.Lock()
+class MTi_Serial_IMU:
+    def __init__(self, port="/dev/ttyUSB0", baudrate=2000000):
+        self.port = port
+        self.baudrate = baudrate
         self.latest_data = {
             "gyro": np.zeros(3),
             "projected_gravity": np.array([0.0, 0.0, -1.0]),
         }
+        self.lock = threading.Lock()
+        self.running = False
+        self.serial = None
+        self.thread = None
 
-    def _init_sensor(self):
-        from adafruit_extended_bus import ExtendedI2C as I2C
-        import adafruit_bno055
+    def _compute_checksum(self, data: bytes) -> int:
+        return (-sum(data)) & 0xFF
+
+    def _send_message(self, mid: int, payload: bytes = b''):
+        msg = bytes([0xFF, mid, len(payload)]) + payload
+        cs = self._compute_checksum(msg)
+        self.serial.write(bytes([0xFA]) + msg + bytes([cs]))
+
+    def _configure_outputs(self):
+        self._send_message(0x30)  # GoToConfig
+        time.sleep(0.1)
+        self.serial.reset_input_buffer()
+        payload = bytes([
+            0x20, 0x10, 0x00, 0x32,  # Quaternion (float32), 50 Hz
+            0x80, 0x20, 0x00, 0x32,  # Rate of Turn (float32), 50 Hz
+        ])
+        self._send_message(0xC0, payload)
+        time.sleep(0.2)
+        self._send_message(0x10)  # GoToMeasurement
+        time.sleep(0.1)
+        self.serial.reset_input_buffer()
+        print("[MTi-3] Output configuration set: Quaternion + RateOfTurn @ 50 Hz")
+
+    def start(self):
         try:
-            self.sensor = adafruit_bno055.BNO055_I2C(I2C(self.i2c_bus_num))
-            time.sleep(1)
-            print(f"BNO055 detected on I2C bus {self.i2c_bus_num}")
-            return True
+            self.serial = serial.Serial(self.port, self.baudrate, timeout=0.1)
+            self.serial.reset_input_buffer()
         except Exception as e:
-            print(f"FATAL: Could not initialize BNO055: {e}", file=sys.stderr)
+            print(f"[FATAL] Failed to open MTi-3 on {self.port}: {e}", file=sys.stderr)
             return False
-
-    def calibrate(self):
-        if not self._init_sensor():
-            return False
-        print(f"Calibrating IMU ({self.calibration_samples} samples) — keep still...")
-        time.sleep(1)
-        gyro_samples, gravity_samples = [],[]
-        
-        for i in range(self.calibration_samples):
-            gyro = self.sensor.gyro
-            gravity = self.sensor.gravity
-            if gyro is not None and gravity is not None:
-                if None not in gyro and None not in gravity:
-                    gyro_samples.append(gyro)
-                    gravity_samples.append(gravity)
-            sys.stdout.write(f"\r  Sample {i + 1}/{self.calibration_samples}")
-            sys.stdout.flush()
-            time.sleep(0.05)
-        print()
-        
-        self.gyro_offset = np.mean(gyro_samples, axis=0)
-        
-        # --- FIX: Clean Gravity Calibration ---
-        avg_gravity = np.mean(gravity_samples, axis=0)
-        avg_gravity_norm = avg_gravity / np.linalg.norm(avg_gravity)
-        
-        # The sensor measures normal force (pointing UP). 
-        # MuJoCo expects gravity pointing DOWN. We negate it so it roughly points [0,0,-1]
-        base_grav = -avg_gravity_norm 
-        
-        # Find the small leveling rotation to make it exactly[0, 0, -1]
-        ideal_gravity = np.array([0.0, 0.0, -1.0])
-        self.gravity_correction, _ = Rotation.align_vectors([ideal_gravity], [base_grav])
-        
-        print(f"  Gyro offset : {np.array2string(self.gyro_offset, precision=4)}")
-        print("IMU calibration complete.\n")
+        self._configure_outputs()
+        self.running = True
+        self.thread = threading.Thread(target=self._read_loop, daemon=True)
+        self.thread.start()
+        print(f"[MTi-3] Connected at {self.baudrate} baud on {self.port}")
         return True
 
     def _read_loop(self):
         while self.running:
-            t0 = time.time()
             try:
-                raw_gyro = self.sensor.gyro
-                raw_gravity = self.sensor.gravity
-                if raw_gyro is None or raw_gravity is None or None in raw_gyro or None in raw_gravity:
-                    continue
-                
-                # --- FIX: Just subtract offset, no arbitrary *-1 multipliers ---
-                gyro = np.array(raw_gyro) - self.gyro_offset
-                
-                # --- FIX: Clean Gravity Projection ---
-                grav = np.array(raw_gravity)
-                mag = np.linalg.norm(grav)
-                if mag > 1e-6:
-                    grav = -grav / mag  # Negate so it points down
-                else:
-                    grav = np.array([0.0, 0.0, -1.0])
-                    
-                # Apply the leveling correction
-                grav = self.gravity_correction.apply(grav)
-                
-                with self.lock:
-                    self.latest_data["gyro"] = gyro
-                    self.latest_data["projected_gravity"] = grav
-            except Exception as e:
-                pass
-            
-            elapsed = time.time() - t0
-            sleep = (1.0 / self.frequency) - elapsed
-            if sleep > 0:
-                time.sleep(sleep)
-                
-    # ... (start, stop, get_data remain exactly the same) ...
+                if self.serial.read(1) == b'\xFA' and self.serial.read(1) == b'\xFF' and self.serial.read(1) == b'\x36':
+                    length_bytes = self.serial.read(1)
+                    if not length_bytes: continue
+                    length = length_bytes[0]
+                    data = self.serial.read(length)
+                    checksum_bytes = self.serial.read(1)
+                    if len(data) < length or not checksum_bytes: continue
+                    if (0xFF + 0x36 + length + sum(data) + checksum_bytes[0]) & 0xFF != 0: continue
 
-    def start(self):
-        if not self.calibrate():
-            return False
-        self.running = True
-        self.thread = threading.Thread(target=self._read_loop, daemon=True)
-        self.thread.start()
-        print("IMU reader thread started.")
-        return True
+                    idx = 0
+                    gyro, quat = None, None
+                    while idx < length:
+                        group = data[idx]; type_id = data[idx+1]; size = data[idx+2]
+                        payload = data[idx+3 : idx+3+size]
+                        if group == 0x80 and (type_id == 0x20 or type_id == 0x23) and size in (12, 24):
+                            gyro = np.array(struct.unpack(">3f" if size == 12 else ">3d", payload))
+                        elif group == 0x20 and type_id == 0x10 and size == 16:
+                            q = struct.unpack(">4f", payload)
+                            quat = Rotation.from_quat([q[1], q[2], q[3], q[0]]).inv().apply([0.0, 0.0, -1.0])
+                        idx += 3 + size
+
+                    with self.lock:
+                        if gyro is not None: self.latest_data["gyro"] = gyro
+                        if quat is not None: self.latest_data["projected_gravity"] = quat
+            except Exception:
+                pass
 
     def stop(self):
         self.running = False
-        if self.thread:
-            self.thread.join()
-        print("IMU reader thread stopped.")
+        if self.thread: self.thread.join()
+        if self.serial: self.serial.close()
 
     def get_latest_data(self):
         with self.lock:
@@ -248,8 +214,9 @@ JOINT_LIMITS = {
     "Head_Roll":       (-0.52, 0.52),
 }
 
-CAN_CHANNELS =["can2", "can1", "can0"]
-LPF_ALPHA = 0.1
+CAN_CHANNELS =["can2", "can0", "can1"]
+LPF_ALPHA_POS = 1.0  # Pass raw positions (No delay)
+LPF_ALPHA_VEL = 0.1  # Filter velocities (Smooths out the noise)
 
 
 # ==========================================
@@ -257,8 +224,10 @@ LPF_ALPHA = 0.1
 # ==========================================
 class HardwareBackend(RobotBackend):
     def __init__(self, model_path: Path, loop_dt: float = 0.005,
-                 standup_duration: float = 2.0, i2c_bus: int = 7,
-                 legs_only: bool = False):  # <--- NEW ARGUMENT
+                 standup_duration: float = 2.0, imu_port: str = "/dev/ttyUSB0",
+                 legs_only: bool = False, use_imu: bool = True): # Add use_imu parameter
+        
+        self.use_imu = use_imu # Store it
 
         self.cfg = load_policy_config(model_path)
         self.loop_dt = loop_dt
@@ -321,11 +290,16 @@ class HardwareBackend(RobotBackend):
         self._filtered_velocities = np.zeros(self.num_joints, dtype=np.float32)
         self._initialized_filter = False
 
+        
         print("Initializing IMU...")
-        self.imu = BNO055_IMU(i2c_bus_num=i2c_bus, frequency=50.0)
-        if not self.imu.start():
-            raise RuntimeError("IMU initialization failed")
-        atexit.register(self.imu.stop)
+        if self.use_imu:
+            self.imu = MTi_Serial_IMU(port=imu_port)
+            if not self.imu.start():
+                raise RuntimeError("IMU initialization failed")
+            atexit.register(self.imu.stop)
+        else:
+            print("[WARN] IMU disabled. Using dummy values.")
+            self.imu = None # Or a dummy class if your code calls get_latest_data()
 
         print("Enabling all motors...")
         time.sleep(0.5)
@@ -408,7 +382,6 @@ class HardwareBackend(RobotBackend):
                     pass
 
     def _read_and_filter(self):
-        # ... (Identical to original) ...
         self._update_motor_states()
 
         for i, (bus_idx, motor_id, _) in enumerate(self._joint_wiring):
@@ -416,8 +389,10 @@ class HardwareBackend(RobotBackend):
             raw_vel = self._motor_states[motor_id]["vel"]
 
             if self._initialized_filter:
-                self._filtered_positions[i] = (LPF_ALPHA * raw_pos + (1.0 - LPF_ALPHA) * self._filtered_positions[i])
-                self._filtered_velocities[i] = (LPF_ALPHA * raw_vel + (1.0 - LPF_ALPHA) * self._filtered_velocities[i])
+                # Use POS alpha for positions (1.0 = raw)
+                self._filtered_positions[i] = (LPF_ALPHA_POS * raw_pos + (1.0 - LPF_ALPHA_POS) * self._filtered_positions[i])
+                # Use VEL alpha for velocities (0.1 = smoothed)
+                self._filtered_velocities[i] = (LPF_ALPHA_VEL * raw_vel + (1.0 - LPF_ALPHA_VEL) * self._filtered_velocities[i])
             else:
                 self._filtered_positions[i] = raw_pos
                 self._filtered_velocities[i] = raw_vel
@@ -487,8 +462,15 @@ class HardwareBackend(RobotBackend):
         self._read_and_filter()
         print("[DEBUG] Hardware buffers flushed.")
 
-    def get_imu_angular_velocity(self) -> np.ndarray: return self.imu.get_latest_data()["gyro"]
-    def get_projected_gravity(self) -> np.ndarray: return self.imu.get_latest_data()["projected_gravity"]
+    def get_imu_angular_velocity(self) -> np.ndarray: 
+        if self.use_imu:
+            return self.imu.get_latest_data()["gyro"]
+        return np.zeros(3)
+
+    def get_projected_gravity(self) -> np.ndarray: 
+        if self.use_imu:
+            return self.imu.get_latest_data()["projected_gravity"]
+        return np.array([0.0, 0.0, -1.0])
     
     def get_joint_positions(self, joint_ids: np.ndarray) -> np.ndarray:
         self._read_and_filter()

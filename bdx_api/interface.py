@@ -294,11 +294,14 @@ class PolicyRunner:
                 )
 
             # --- CONTROL INTERPOLATION STEP (e.g. 200Hz) ---
-            if self.decimation > 1:
-                alpha = (it % self.decimation) / float(self.decimation - 1)
-                self.current_interpolated_actions = (1.0 - alpha) * self.prev_actions + (alpha * self.new_actions)
-            else:
-                self.current_interpolated_actions = self.new_actions
+            #if self.decimation > 1:
+            #    alpha = (it % self.decimation) / float(self.decimation - 1)
+            #    self.current_interpolated_actions = (1.0 - alpha) * self.prev_actions + (alpha * self.new_actions)
+            #else:
+            #    self.current_interpolated_actions = self.new_actions
+            # --- CONTROL STEP (Zero-Order Hold) ---
+            # Apply the exact action the policy requested immediately, just like the simulator does.
+            self.current_interpolated_actions = self.new_actions
 
             # Calculate final targets using the smoothed action
             action_delta = self.current_interpolated_actions * self.action_scale

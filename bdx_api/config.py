@@ -21,7 +21,7 @@ def resolve_model_path() -> Path:
         return p
 
     project_root = Path(__file__).resolve().parent.parent
-    default_path = project_root / "models" / "newlegs.onnx"
+    default_path = project_root / "models" / "best.onnx"
 
     if not default_path.exists():
         raise FileNotFoundError(
@@ -149,20 +149,20 @@ def load_policy_config(model_path: Path = None) -> RobotPolicyConfig:
 # Higher than policy gains — used to hold the robot stiffly upright
 # before the learned policy takes over.
 STANDUP_GAINS = {
-    "Left_Hip_Yaw":    (150.957, 5.027),
-    "Left_Hip_Roll":   (150.957, 5.027),
-    "Left_Hip_Pitch":  (150.957, 5.027),
-    "Left_Knee":       (150.957, 5.027),
-    "Left_Ankle":      (50.581,  1.056),
-    "Right_Hip_Yaw":   (150.957, 5.027),
-    "Right_Hip_Roll":  (150.957, 5.027),
-    "Right_Hip_Pitch": (150.957, 5.027),
-    "Right_Knee":      (150.957, 5.027),
-    "Right_Ankle":     (50.581,  1.056),
-    "Neck_Pitch":      (16.581,  1.056),
-    "Head_Pitch":      (5.763,   0.376),
-    "Head_Yaw":        (5.763,   0.376),
-    "Head_Roll":       (5.763,   0.376),
+    "Left_Hip_Yaw":    (78.957, 5.027),
+    "Left_Hip_Roll":   (78.957, 5.027),
+    "Left_Hip_Pitch":  (78.957, 5.027),
+    "Left_Knee":       (78.957, 5.027),
+    "Left_Ankle":      (16.581, 1.056),
+    "Right_Hip_Yaw":   (78.957, 5.027),
+    "Right_Hip_Roll":  (78.957, 5.027),
+    "Right_Hip_Pitch": (78.957, 5.027),
+    "Right_Knee":      (78.957, 5.027),
+    "Right_Ankle":     (16.581, 1.056),
+    "Neck_Pitch":      (16.581, 1.056),
+    "Head_Pitch":      (2.763,  0.176),
+    "Head_Yaw":        (2.763,  0.176),
+    "Head_Roll":       (2.763,  0.176),
 }
 
 # ==========================================

@@ -20,8 +20,8 @@ SEQUENTIAL_NAMES =[
 ]
 
 # --- TRAJECTORY SHAPING (Sequential: Left Leg, then Right Leg) ---
-BIAS = np.array([0.0, 0.0, 0.3, -0.6, 0.3,   0.0, 0.0, 0.3, -0.6, 0.3])
-SCALE = np.array([0.03, 0.1, 0.08, 0.1, 0.3,   0.03, 0.1, 0.08, 0.1, 0.3])
+BIAS = np.zeros(10)
+SCALE = np.array([0.15, 0.15, 0.25, 0.3, 0.4,   0.15, 0.15, 0.25, 0.3, 0.4])
 DIR = np.array([1.0, 1.0, 1.0, -1.0, 1.0,   -1.0, -1.0, 1.0, -1.0, 1.0])
 
 HARDCODED_KP = np.array([
@@ -71,7 +71,7 @@ def main():
             model_path=Path(args.model),
             loop_dt=args.sim_dt,
             legs_only=args.legs,
-            no_imu=args.no_imu
+            use_imu=not args.no_imu 
         )
 
     # =================================================================
@@ -102,11 +102,37 @@ def main():
     if args.sim and hasattr(backend, '_apply_policy_gains'):
         backend._apply_policy_gains()
 
-    # 1. Standup to the STARTUP_POS safely
+# 1. Standup to the STARTUP_POS safely
     backend.standup(duration=2.0)
-    time.sleep(1.0) 
+    
+    # --- NEW: FLUSH THE BACKLOG ---
+    # Standup sent thousands of messages without reading, filling the buffer with old data.
+    # We MUST flush the bus so we only read fresh data going forward.
+    if hasattr(backend, 'activate_policy_gains'):
+        backend.activate_policy_gains()
+    
+    # 2. ACTIVELY HOLD the standup position for 2.0s
+    print("[INFO] Actively holding start position and warming up sensor filters...")
+    hold_steps = int(2.0 / args.sim_dt)
+    
+    start_targets = backend.get_default_pos_array(10)
+    for backend_idx, joint_name in enumerate(policy_order):
+        seq_idx = SEQUENTIAL_NAMES.index(joint_name)
+        start_targets[backend_idx] = seq_startup[seq_idx]
+        
+    for step in range(hold_steps):
+        backend.set_joint_targets(start_targets)
+        
+        # SLEEP FIRST: Gives the motors 2.5ms to receive the command and send a reply
+        backend.step() 
+        
+        # READ SECOND: Now we read the fresh reply that just arrived
+        backend.get_joint_positions(np.arange(10)) 
+        
+        if step % int(1.0 / args.sim_dt) == 0:
+            print(f"  [INFO] Holding... {step * args.sim_dt:.1f}s")
 
- # 3. CHIRP SEQUENCE
+    # 3. CHIRP SEQUENCE
     print("\n🚀 STARTING CHIRP SEQUENCE! Keep hands clear!")
     num_steps = int(args.duration / args.sim_dt)
     
