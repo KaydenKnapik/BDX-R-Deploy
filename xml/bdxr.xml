@@ -16,6 +16,7 @@
 
   <asset>
     <!-- Textures -->
+    <material name="matplane" reflectance="0.3" texture="texplane" texrepeat="1 1" texuniform="true"/>
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
     <texture name="texplane" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="512" height="512" mark="cross" markrgb=".8 .8 .8"/>
 
@@ -108,11 +109,13 @@
   </asset>
 
   <worldbody>
+    <!-- FIXED: condim=3 with friction matching training config -->
+    <geom name="ground" type="plane" pos="0 0 0" size="0 0 1" material="matplane" condim="3" friction="0.6 0.005 0.0001"/>
     <body name="base_link" pos="0 0 0.33" childclass="bdx-r">
       <freejoint/>
       <inertial pos="-0.087197 -3.9994e-05 -0.0342399" mass="1" fullinertia="0.042338 0.058645 0.033168 7e-05 0.0057 3.4e-05"/>
       <geom class="visual" mesh="base_link"/>
-      <geom class="collision" name="base_collision" size="0.12" fromto="-0.2 0 0 -0.05 0 0"/>
+      <geom class="collision" name="base_collision" size="0.12" fromto="-0.2 0 0 -0.05 0 0" condim="1"/>
 
       <!-- ATTACHMENT: Bottom Cover -->
       <body name="Bottom_Cover" pos="-0.075084 0.063 -0.123908">
@@ -227,7 +230,7 @@
         
         <!-- JOINT: Left_Hip_Yaw -->
         <body name="Left_Hip_Top_Holder" pos="0.04527 -0.018751 -0.0025">
-          <joint name="Left_Hip_Yaw" axis="0 0 1" range="-0.2618 0.2618"/>
+          <joint name="Left_Hip_Yaw" axis="0 0 1" range="-0.2618 0.2618" armature="0.02"/>
           <inertial pos="0.00162 0.003199 -0.011367" mass="0.08" fullinertia="0.000247 0.000261 0.000411 -5e-06 2.3e-05 1.1e-05"/>
           <geom class="visual" mesh="Left_Hip_Top_Holder" pos="0.103104 -0.05 -0.021836"/>
           
@@ -241,13 +244,13 @@
 
             <!-- JOINT: Left_Hip_Roll -->
             <body name="Left_Hip_Roll_Connector" pos="0.0025 -0.018751 -0.04527">
-              <joint name="Left_Hip_Roll" axis="1 0 0" range="-0.349 0.2618"/>
+              <joint name="Left_Hip_Roll" axis="1 0 0" range="-0.349 0.2618" armature="0.02"/>
               <inertial pos="0.002336 0.02932 9e-05" mass="0.1" fullinertia="0.000314 7e-05 0.000291 3.6e-05 1e-06 -1e-06"/>
               <geom class="visual" mesh="Left_Hip_Roll_Connector" pos="0.085104 -0.0625 0.040708"/>
 
               <!-- JOINT: Left_Hip_Pitch -->
               <body name="Left_Hip_Pitch_Motor" pos="-0.008646 0.07125 0.001341">
-                <joint name="Left_Hip_Pitch" axis="0 1 0" range="-0.698 1.047"/>
+                <joint name="Left_Hip_Pitch" axis="0 1 0" range="-0.698 1.047" armature="0.02"/>
                 <inertial pos="6e-05 0.023752 -2e-05" mass="0.92" fullinertia="0.000918 0.001215 0.00088 -1e-06 -1e-06 -6e-06"/>
                 <geom class="visual" mesh="Left_Hip_Pitch_Motor" pos="0.09375 -0.13375 0.039367"/>
                 
@@ -273,7 +276,7 @@
                        
                        <!-- JOINT: Left_Knee -->
                        <body name="Left_Lower_Leg" pos="0.045459 -0.0025 0.01829">
-                           <joint name="Left_Knee" axis="0 -1 0" range="-1.309 0.9599"/>
+                           <joint name="Left_Knee" axis="0 -1 0" range="-1.309 0.9599" armature="0.02"/>
                            <inertial pos="0.012283 -0.021155 -0.065391" mass="0.33" fullinertia="0.009108 0.011365 0.003048 0.000146 0.00238 -0.000492"/>
                            <geom class="visual" mesh="Left_Lower_Leg" pos="0.173056 -0.13375 0.117076"/>
                            <body name="Left_Ankle_Cover" pos="0.072419 -0.045377 -0.097578">
@@ -287,15 +290,21 @@
                                
                                <!-- JOINT: Left_Ankle -->
                                <body name="Left_Foot" pos="0.036018 0.004 -0.005913">
-                                   <joint name="Left_Ankle" axis="0 -1 0" range="-0.785 1.2217"/>
+                                   <joint name="Left_Ankle" axis="0 -1 0" range="-0.785 1.2217" armature="0.0042"/>
                                    <inertial pos="0.02614 -0.004666 -0.039192" mass="0.22" fullinertia="0.001447 0.004937 0.004441 0.000142 0.000184 -0.000331"/>
                                    <geom class="visual" mesh="Left_Foot" material="silver" pos="0.127907 -0.12841 0.247154"/>
-                                   <geom class="collision" name="left_foot_collision1" size="0.01" fromto="-0.045 -0.01 -0.071 0.1 -0.01 -0.071"/>
-                                   <geom class="collision" name="left_foot_collision2" size="0.01" fromto="-0.045 -0.025 -0.071 0.1 -0.025 -0.071"/>
                                    <site name="left_foot" pos="0.035 -0.025682 -0.071" size="0.01" rgba="1 0 0 1"/>
                                    <body name="Left_Foot_Pad" pos="0.10668 -0.025682 -0.057538">
                                        <inertial pos="-0.0795 0.007701 -0.014067" mass="0.08" fullinertia="0.000118 0.001881 0.001957 0 0 0"/>
                                        <geom class="visual" mesh="Left_Foot_Pad" material="silver" pos="0.021227 -0.102728 0.304692"/>
+                                       <!-- FIXED: Collision capsules matching training XML exactly -->
+                                       <geom class="collision" name="left_foot_collision1" size="0.01" fromto="-0.152 0.001 -0.013 -0.007 0.001 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision2" size="0.01" fromto="-0.147 0.006 -0.013 -0.012 0.006 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision3" size="0.01" fromto="-0.142 0.011 -0.013 -0.017 0.011 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision4" size="0.01" fromto="-0.142 0.016 -0.013 -0.017 0.016 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision5" size="0.01" fromto="-0.142 0.021 -0.013 -0.017 0.021 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision6" size="0.01" fromto="-0.147 0.026 -0.013 -0.012 0.026 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision7" size="0.01" fromto="-0.152 0.031 -0.013 -0.007 0.031 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
                                    </body>
                                    <body name="Left_Foot_Cover" pos="0.102636 0.0135 -0.048903">
                                        <inertial pos="-0.053452 -0.014306 0.021311" mass="0.02" fullinertia="0.000477 0.000977 0.000856 0.000178 6.1e-05 3.8e-05"/>
@@ -319,7 +328,7 @@
         
         <!-- JOINT: Right_Hip_Yaw -->
         <body name="Right_Hip_Top_Holder" pos="0.04527 0.018751 -0.0025">
-           <joint name="Right_Hip_Yaw" axis="0 0 1" range="-0.2618 0.2618"/>
+           <joint name="Right_Hip_Yaw" axis="0 0 1" range="-0.2618 0.2618" armature="0.02"/>
            <inertial pos="0.00162 -0.003199 -0.013107" mass="0.08" fullinertia="0.000247 0.000261 0.000411 5e-06 2.3e-05 -1.1e-05"/>
            <geom class="visual" mesh="Right_Hip_Top_Holder" pos="0.103104 0.05 -0.021836"/>
 
@@ -333,13 +342,13 @@
 
                <!-- JOINT: Right_Hip_Roll -->
                <body name="Right_Hip_Roll_Connector" pos="0.0025 -0.018751 -0.04527">
-                   <joint name="Right_Hip_Roll" axis="-1 0 0" range="-0.349 0.2618"/>
+                   <joint name="Right_Hip_Roll" axis="-1 0 0" range="-0.349 0.2618" armature="0.02"/>
                    <inertial pos="0.002336 -0.02932 9e-05" mass="0.1" fullinertia="0.000314 7e-05 0.000291 -3.6e-05 1e-06 1e-06"/>
                    <geom class="visual" mesh="Right_Hip_Roll_Connector" pos="0.085104 0.0625 0.042448"/>
 
                    <!-- JOINT: Right_Hip_Pitch -->
                    <body name="Right_Hip_Pitch_Motor" pos="-0.008646 -0.07125 0.001341">
-                       <joint name="Right_Hip_Pitch" axis="0 -1 0" range="-1.047 0.698"/>
+                       <joint name="Right_Hip_Pitch" axis="0 -1 0" range="-1.047 0.698" armature="0.02"/>
                        <inertial pos="6e-05 -0.023752 -2e-05" mass="0.92" fullinertia="0.000918 0.001215 0.00088 1e-06 -1e-06 6e-06"/>
                        <geom class="visual" mesh="Right_Hip_Pitch_Motor" pos="0.09375 0.13375 0.041107"/>
                        
@@ -365,7 +374,7 @@
                                
                                <!-- JOINT: Right_Knee -->
                                <body name="Right_Lower_Leg" pos="0.01829 0.0025 -0.045459">
-                                   <joint name="Right_Knee" axis="0 -1 0" range="-1.309 0.9599"/>
+                                   <joint name="Right_Knee" axis="0 -1 0" range="-1.309 0.9599" armature="0.02"/>
                                    <inertial pos="0.012283 0.021155 -0.065391" mass="0.33" fullinertia="0.009108 0.011365 0.003048 -0.000146 0.00238 0.000492"/>
                                    <geom class="visual" mesh="Right_Lower_Leg" pos="0.173056 0.13375 0.118816"/>
                                    <body name="Right_Ankle_Cover" pos="0.017878 0.045377 -0.162577">
@@ -379,15 +388,21 @@
                                        
                                        <!-- JOINT: Right_Ankle -->
                                        <body name="Right_Foot" pos="0.000432 -0.004 -0.036498">
-                                           <joint name="Right_Ankle" axis="0 -1 0" range="-0.785 1.2217"/>
+                                           <joint name="Right_Ankle" axis="0 -1 0" range="-0.785 1.2217" armature="0.0042"/>
                                            <inertial pos="0.02614 0.004666 -0.039192" mass="0.22" fullinertia="0.001447 0.004937 0.004441 -0.000142 0.000184 0.000331"/>
                                            <geom class="visual" mesh="Right_Foot" material="silver" pos="0.127907 0.12841 0.248894"/>
-                                           <geom class="collision" name="right_foot_collision1" size="0.01" fromto="-0.045 0.01 -0.071 0.1 0.01 -0.071"/>
-                                           <geom class="collision" name="right_foot_collision2" size="0.01" fromto="-0.045 0.025 -0.071 0.1 0.025 -0.071"/>
                                            <site name="right_foot" pos="0.035 0.018025 -0.071" size="0.01 0.01 0.01" rgba="1 0 0 1"/> 
                                            <body name="Right_Foot_Pad" pos="0.10668 0.018025 -0.059278">
                                                <inertial pos="-0.0795 0 -0.012327" mass="0.08" fullinertia="0.000118 0.001881 0.001957 0 0 0"/>
                                                <geom class="visual" mesh="Right_Foot_Pad" material="silver" pos="0.021227 0.110385 0.308172"/>
+                                               <!-- FIXED: Collision capsules matching training XML exactly -->
+                                               <geom class="collision" name="right_foot_collision1" size="0.01" fromto="-0.152 0.007 -0.012 -0.007 0.007 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision2" size="0.01" fromto="-0.147 0.002 -0.012 -0.012 0.002 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision3" size="0.01" fromto="-0.142 -0.003 -0.012 -0.017 -0.003 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision4" size="0.01" fromto="-0.142 -0.008 -0.012 -0.017 -0.008 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision5" size="0.01" fromto="-0.142 -0.013 -0.012 -0.017 -0.013 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision6" size="0.01" fromto="-0.147 -0.018 -0.012 -0.012 -0.018 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision7" size="0.01" fromto="-0.152 -0.023 -0.012 -0.007 -0.023 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
                                            </body>
                                            <body name="Right_Foot_Cover" pos="-0.041752 -0.0135 -0.042544">
                                                <inertial pos="0.09107 0.014411 0.015231" mass="0.02" fullinertia="0.000512 0.001003 0.000864 -0.000182 5.3e-05 -4.9e-05"/>
@@ -411,7 +426,7 @@
 
         <!-- JOINT: Neck_Pitch -->
         <body name="Neck" pos="-0.030954 -0.004 0.019342">
-           <joint name="Neck_Pitch" axis="0 1 0" range="-0.349 0.872"/>
+           <joint name="Neck_Pitch" axis="0 1 0" range="-0.349 0.872" armature="0.0042"/>
            <inertial pos="-0.025459 0.012476 0.060682" mass="0.2" fullinertia="0.001657 0.001959 0.001097 0.000115 0.000638 -0.000281"/>
            <geom class="visual" mesh="Neck" pos="0.01382 0.02045 -0.063875"/>
 
@@ -421,7 +436,7 @@
                
                <!-- JOINT: Head_Pitch -->
                <body name="Head_Pitch_Motor_Support" pos="-0.017501 0.0 0.011149">
-                   <joint name="Head_Pitch" axis="0 1 0" range="-1.047 0.872"/>
+                   <joint name="Head_Pitch" axis="0 1 0" range="-1.047 0.872" armature="0.0042"/>
                    <inertial pos="-0.008749 0.014921 0.040678" mass="0.08" fullinertia="0.000418 0.00034 0.00018 1.5e-05 6.4e-05 -6.2e-05"/>
                    <geom class="visual" mesh="Head_Pitch_Motor_Support" pos="0.078605 0.02611 -0.175255"/>
                    
@@ -431,13 +446,13 @@
                        
                        <!-- JOINT: Head_Yaw -->
                        <body name="Head_Roll_Connector" pos="0.01917 -0.007941 0.0">
-                           <joint name="Head_Yaw" axis="0 0 -1" range="-0.872 0.872"/>
+                           <joint name="Head_Yaw" axis="0 0 -1" range="-0.872 0.872" armature="0.0042"/>
                            <inertial pos="0.020343 -4e-08 0.003477" mass="0.05" fullinertia="2.8e-05 7.4e-05 7.2e-05 -0 1.4e-05 0"/>
                            <geom class="visual" mesh="Head_Roll_Connector" pos="0.077404 0.007 -0.249612"/>
 
                            <!-- JOINT: Head_Roll -->
                            <body name="Head_Roll_Motor" pos="0.043997 0.0 -0.009">
-                               <joint name="Head_Roll" axis="-1 0 0" range="-0.523 0.523"/>
+                               <joint name="Head_Roll" axis="-1 0 0" range="-0.523 0.523" armature="0.0042"/>
                                <inertial pos="0.017246 -0.000173 -1e-05" mass="0.242" fullinertia="5.9e-05 6.7e-05 6.6e-05 1e-06 0 -0"/>
                                <geom class="visual" mesh="Head_Roll_Motor" pos="0.033407 0.007 -0.240612"/>
 
@@ -504,17 +519,29 @@
     </body>
   </worldbody>
 
-
-  <!-- if you add more collision, note that you can exclude two bodies to collide between each others-->
-  <!-- <contact>
-    <exclude body1="leg_left_ankle_link" body2="leg_left_knee_link"/>
-  </contact> -->
-
   <sensor>
     <gyro name="imu_ang_vel" site="imu"/>
     <velocimeter name="imu_lin_vel" site="imu"/>
     <accelerometer name="imu_lin_acc" site="imu"/>
     <subtreeangmom name="root_angmom" body="base_link"/>
   </sensor>
+
+  <actuator>
+    <!-- Order must match ONNX joint_names exactly -->
+    <motor name="Left_Hip_Yaw" joint="Left_Hip_Yaw" ctrlrange="-42 42"/>
+    <motor name="Left_Hip_Roll" joint="Left_Hip_Roll" ctrlrange="-42 42"/>
+    <motor name="Left_Hip_Pitch" joint="Left_Hip_Pitch" ctrlrange="-42 42"/>
+    <motor name="Left_Knee" joint="Left_Knee" ctrlrange="-42 42"/>
+    <motor name="Left_Ankle" joint="Left_Ankle" ctrlrange="-10.9 10.9"/>
+    <motor name="Right_Hip_Yaw" joint="Right_Hip_Yaw" ctrlrange="-42 42"/>
+    <motor name="Right_Hip_Roll" joint="Right_Hip_Roll" ctrlrange="-42 42"/>
+    <motor name="Right_Hip_Pitch" joint="Right_Hip_Pitch" ctrlrange="-42 42"/>
+    <motor name="Right_Knee" joint="Right_Knee" ctrlrange="-42 42"/>
+    <motor name="Right_Ankle" joint="Right_Ankle" ctrlrange="-10.9 10.9"/>
+    <motor name="Neck_Pitch" joint="Neck_Pitch" ctrlrange="-10.9 10.9"/>
+    <motor name="Head_Pitch" joint="Head_Pitch" ctrlrange="-4.2 4.2"/>
+    <motor name="Head_Yaw" joint="Head_Yaw" ctrlrange="-4.2 4.2"/>
+    <motor name="Head_Roll" joint="Head_Roll" ctrlrange="-4.2 4.2"/>
+  </actuator>
 
 </mujoco>
