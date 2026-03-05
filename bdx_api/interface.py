@@ -1,5 +1,8 @@
+import os
+import sys
 import time
 import signal
+import atexit
 import numpy as np
 import onnxruntime as ort
 from abc import ABC, abstractmethod
@@ -183,6 +186,7 @@ class PolicyRunner:
         # Logger
         self.logger = RuntimeLogger(joint_names=self.cfg.joint_names)
         self._interrupted = False
+        self._sigint_count = 0
 
     def _build_observation(self, cmd: np.ndarray) -> np.ndarray:
         """Build the observation vector from sensor data + command."""
@@ -211,14 +215,28 @@ class PolicyRunner:
         return np.concatenate(obs_parts).astype(np.float32)
 
     def _handle_sigint(self, signum, frame):
-        """Handle Ctrl+C gracefully."""
+        """Handle Ctrl+C gracefully. Double Ctrl+C force-quits."""
+        self._sigint_count += 1
+        if self._sigint_count >= 2:
+            print("\n\n  Double Ctrl+C — force quitting!")
+            self._cleanup()
+            os._exit(1)
         print("\n\n  Ctrl+C received — stopping and plotting...")
+        print("  (Press Ctrl+C again to force-quit)")
         self._interrupted = True
+
+    def _cleanup(self):
+        """Stop the keyboard listener and any backend resources."""
+        try:
+            self.kb._listener.stop()
+        except Exception:
+            pass
 
     def run(self):
         """Main control loop."""
         # Register Ctrl+C handler
         old_handler = signal.signal(signal.SIGINT, self._handle_sigint)
+        atexit.register(self._cleanup)
 
         it = 0
         print_every = int(1.0 / (0.005 * self.decimation))
@@ -287,6 +305,9 @@ class PolicyRunner:
             self.backend.set_joint_targets(self.dof_targets)
             self.backend.step()
             it += 1
+
+        # Cleanup
+        self._cleanup()
 
         # Restore old signal handler
         signal.signal(signal.SIGINT, old_handler)

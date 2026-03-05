@@ -388,7 +388,7 @@
                                        
                                        <!-- JOINT: Right_Ankle -->
                                        <body name="Right_Foot" pos="0.000432 -0.004 -0.036498">
-                                           <joint name="Right_Ankle" axis="0 -1 0" range="-0.785 1.2217" armature="0.0042"/>
+                                           <joint name="Right_Ankle" axis="0 1 0" range=" -1.2217 0.785" armature="0.0042"/>
                                            <inertial pos="0.02614 0.004666 -0.039192" mass="0.22" fullinertia="0.001447 0.004937 0.004441 -0.000142 0.000184 0.000331"/>
                                            <geom class="visual" mesh="Right_Foot" material="silver" pos="0.127907 0.12841 0.248894"/>
                                            <site name="right_foot" pos="0.035 0.018025 -0.071" size="0.01 0.01 0.01" rgba="1 0 0 1"/> 
