@@ -1,4 +1,5 @@
 import time
+import signal
 import numpy as np
 import onnxruntime as ort
 from abc import ABC, abstractmethod
@@ -6,6 +7,7 @@ from pathlib import Path
 from pynput import keyboard
 
 from bdx_api.config import load_policy_config, RobotPolicyConfig
+from bdx_api.logger import RuntimeLogger
 
 
 # ==========================================
@@ -101,47 +103,38 @@ class RobotBackend(ABC):
 
     @abstractmethod
     def get_imu_angular_velocity(self) -> np.ndarray:
-        """Returns 3D angular velocity from IMU [rad/s]."""
         ...
 
     @abstractmethod
     def get_projected_gravity(self) -> np.ndarray:
-        """Returns 3D projected gravity vector (unit length, pointing down)."""
         ...
 
     @abstractmethod
     def get_joint_positions(self, joint_ids: np.ndarray) -> np.ndarray:
-        """Returns joint positions [rad] for given joint indices."""
         ...
 
     @abstractmethod
     def get_joint_velocities(self, joint_ids: np.ndarray) -> np.ndarray:
-        """Returns joint velocities [rad/s] for given joint indices."""
         ...
 
     @abstractmethod
     def set_joint_targets(self, targets: np.ndarray) -> None:
-        """Send position targets to all actuators."""
         ...
 
     @abstractmethod
     def step(self) -> None:
-        """Advance one timestep (sim) or sleep to maintain loop rate (real)."""
         ...
 
     @abstractmethod
     def is_running(self) -> bool:
-        """Return False to exit the control loop."""
         ...
 
     @abstractmethod
     def get_joint_map(self, joint_names: list[str]) -> np.ndarray:
-        """Map policy joint names → backend actuator indices."""
         ...
 
     @abstractmethod
     def get_default_pos_array(self, num_actuators: int) -> np.ndarray:
-        """Return a zero array sized to the backend's actuator count."""
         ...
 
 
@@ -187,6 +180,10 @@ class PolicyRunner:
             ang_vel_z_range=(-1.0, 1.0),
         )
 
+        # Logger
+        self.logger = RuntimeLogger(joint_names=self.cfg.joint_names)
+        self._interrupted = False
+
     def _build_observation(self, cmd: np.ndarray) -> np.ndarray:
         """Build the observation vector from sensor data + command."""
         ang_vel = self.backend.get_imu_angular_velocity()
@@ -213,10 +210,18 @@ class PolicyRunner:
 
         return np.concatenate(obs_parts).astype(np.float32)
 
+    def _handle_sigint(self, signum, frame):
+        """Handle Ctrl+C gracefully."""
+        print("\n\n  Ctrl+C received — stopping and plotting...")
+        self._interrupted = True
+
     def run(self):
         """Main control loop."""
+        # Register Ctrl+C handler
+        old_handler = signal.signal(signal.SIGINT, self._handle_sigint)
+
         it = 0
-        print_every = int(1.0 / (0.005 * self.decimation))  # ~once per second
+        print_every = int(1.0 / (0.005 * self.decimation))
 
         print("=" * 50)
         print("  KEYBOARD CONTROLS")
@@ -225,24 +230,73 @@ class PolicyRunner:
         print("  ← / →     Strafe Left / Right")
         print("  Z / X     Turn Left / Right")
         print("  SPACE     Stop all movement")
-        print("  ESC       Quit")
+        print("  ESC       Quit (no plot)")
+        print("  Ctrl+C    Quit + Plot graphs")
         print("=" * 50)
 
-        while self.backend.is_running() and not self.kb.should_quit:
+        while self.backend.is_running() and not self.kb.should_quit and not self._interrupted:
             if it % self.decimation == 0:
                 cmd = self.kb.get_command()
 
                 if it % (self.decimation * print_every) == 0:
-                    print(f"\r  Fwd: {cmd[0]:+.2f}  Lat: {cmd[1]:+.2f}  Yaw: {cmd[2]:+.2f}", end="", flush=True)
+                    print(f"\r  Fwd: {cmd[0]:+.2f}  Lat: {cmd[1]:+.2f}  Yaw: {cmd[2]:+.2f}  "
+                          f"[{len(self.logger.entries)} samples]", end="", flush=True)
 
-                obs = self._build_observation(cmd)
+                # Read sensors
+                ang_vel = self.backend.get_imu_angular_velocity()
+                projected_gravity = self.backend.get_projected_gravity()
+                dof_pos = self.backend.get_joint_positions(self.joint_map)
+                dof_vel = self.backend.get_joint_velocities(self.joint_map)
+
+                # Build observation
+                obs_parts = []
+                for term in self.cfg.observation_names:
+                    term = term.strip()
+                    if term == "projected_gravity":
+                        obs_parts.append(projected_gravity)
+                    elif term == "base_ang_vel":
+                        obs_parts.append(ang_vel)
+                    elif term in ("joint_pos", "dof_pos"):
+                        obs_parts.append(dof_pos - self.default_pos[self.joint_map])
+                    elif term in ("joint_vel", "dof_vel"):
+                        obs_parts.append(dof_vel)
+                    elif term == "actions":
+                        obs_parts.append(self.actions)
+                    elif term in ("command", "commands"):
+                        obs_parts.append(cmd)
+
+                obs = np.concatenate(obs_parts).astype(np.float32)
+
+                # Run policy
                 self.actions = self.session.run(None, {self.input_name: obs.reshape(1, -1)})[0][0]
                 self.dof_targets[self.joint_map] = (
                     self.default_pos[self.joint_map] + self.action_scale * self.actions
+                )
+
+                # Log data
+                self.logger.log(
+                    cmd=cmd,
+                    target_pos=self.dof_targets[self.joint_map],
+                    actual_pos=dof_pos,
+                    actual_vel=dof_vel,
+                    ang_vel=ang_vel,
+                    projected_gravity=projected_gravity,
+                    actions=self.actions,
                 )
 
             self.backend.set_joint_targets(self.dof_targets)
             self.backend.step()
             it += 1
 
-        print("\nShutting down.")
+        # Restore old signal handler
+        signal.signal(signal.SIGINT, old_handler)
+
+        print(f"\n\nRun complete. {len(self.logger.entries)} samples logged.")
+
+        if self._interrupted and len(self.logger.entries) > 1:
+            print("\nGenerating plots...")
+            self.logger.plot(save_dir="logs")
+        elif len(self.logger.entries) > 1:
+            print("(Press Ctrl+C next time to auto-plot, or run logger.plot() manually)")
+
+        print("Shutting down.")

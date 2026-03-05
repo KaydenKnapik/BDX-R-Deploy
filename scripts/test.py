@@ -10,6 +10,7 @@ Controls:
     0            Zero current joint
     SPACE        Zero ALL joints
     R            Go to default pose (from ONNX metadata)
+    +/-          Change step size
     ESC          Quit
 
 Each tap moves the selected joint by ±0.05 rad.
@@ -24,7 +25,7 @@ from pynput import keyboard
 class JointTestController:
     """Keyboard controller for joint-by-joint testing."""
 
-    def __init__(self, num_joints: int, joint_names: list[str],
+    def __init__(self, num_joints: int, joint_names: list,
                  default_pos: np.ndarray, step: float = 0.05):
         self.num_joints = num_joints
         self.joint_names = joint_names
@@ -34,9 +35,9 @@ class JointTestController:
         self.selected = 0
         self.positions = np.zeros(num_joints, dtype=np.float32)
         self._quit = False
-        self._dirty = True  # flag to reprint
+        self._dirty = True
 
-        self._listener = keyboard.Listener(on_press=self._on_press)
+        self._listener = keyboard.Listener(on_press=self._on_press, suppress=False)
         self._listener.daemon = True
         self._listener.start()
 
@@ -124,7 +125,7 @@ def main():
     parser = argparse.ArgumentParser(description="BDX-R Joint Direction Test")
     parser.add_argument("--backend", type=str, default="sim", choices=["sim", "real"],
                         help="Backend: 'sim' for MuJoCo, 'real' for hardware")
-    parser.add_argument("--model", type=str, default="models/best.onnx",
+    parser.add_argument("--model", type=str, default="models/walk.onnx",
                         help="Path to ONNX policy model")
     parser.add_argument("--xml", type=str, default="xml/bdxr.xml",
                         help="Path to MuJoCo XML (sim only)")
@@ -144,13 +145,13 @@ def main():
             xml_path=args.xml,
             model_path=model_path,
             sim_dt=args.sim_dt,
-            fixed=True,  # <-- new parameter: fix robot in air
+            fixed=True,
         )
     elif args.backend == "real":
         from bdx_api.hardware import HardwareBackend
         backend = HardwareBackend(
             model_path=model_path,
-            loop_dt=0.02,  # 50Hz is fine for manual testing
+            loop_dt=0.02,
             standup_duration=2.0,
             i2c_bus=args.i2c_bus,
         )
