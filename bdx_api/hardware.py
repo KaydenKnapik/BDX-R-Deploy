@@ -295,15 +295,17 @@ class HardwareBackend(RobotBackend):
 
         # --- Validate all policy joints are wired ---
         self.num_joints = len(self.cfg.joint_names)
-        self._joint_wiring = []  # ordered by policy joint index
+        self._joint_wiring = []
         for name in self.cfg.joint_names:
             name = name.strip()
             if name not in JOINT_WIRING:
-                raise ValueError(
-                    f"Policy joint '{name}' has no entry in JOINT_WIRING. "
-                    f"Available: {list(JOINT_WIRING.keys())}"
-                )
+                raise ValueError(f"Policy joint '{name}' has no entry in JOINT_WIRING.")
             self._joint_wiring.append(JOINT_WIRING[name])
+
+        # --- Build motor_id → motor_type lookup for feedback decoding ---
+        self._motor_type_by_id = {}
+        for bus_idx, motor_id, motor_type in self._joint_wiring:
+            self._motor_type_by_id[motor_id] = motor_type
 
         # --- Initialize CAN buses ---
         print("Initializing CAN buses...")
@@ -379,7 +381,7 @@ class HardwareBackend(RobotBackend):
         print("CAN buses shut down.")
 
     def _update_motor_states(self):
-        """Read all pending CAN feedback messages."""
+        """Read all pending CAN feedback messages and decode using correct motor type."""
         for bus in self.buses:
             while True:
                 msg = bus.recv(timeout=0)
@@ -396,11 +398,22 @@ class HardwareBackend(RobotBackend):
                     continue
                 if motor_id not in self._motor_states:
                     continue
+
+                # Look up motor type for correct velocity scaling
+                motor_type = self._motor_type_by_id.get(motor_id, "O3")
+                params = MOTOR_TYPE_PARAMS[motor_type]
+
                 try:
+                    # Position decoding (same for all types: ±12.57 rad)
                     angle_raw = struct.unpack(">H", msg.data[0:2])[0]
-                    pos_rad = (float(angle_raw) / 65535.0 * 8.0 * math.pi) - (4.0 * math.pi)
+                    p_range = params["P_MAX"] - params["P_MIN"]
+                    pos_rad = (float(angle_raw) / 65535.0) * p_range + params["P_MIN"]
+
+                    # Velocity decoding (varies by motor type)
                     vel_raw = struct.unpack(">H", msg.data[2:4])[0]
-                    vel_rps = (float(vel_raw) / 65535.0 * 88.0) - 44.0
+                    v_range = params["V_MAX"] - params["V_MIN"]
+                    vel_rps = (float(vel_raw) / 65535.0) * v_range + params["V_MIN"]
+
                     self._motor_states[motor_id]["pos"] = pos_rad
                     self._motor_states[motor_id]["vel"] = vel_rps
                     self._motor_states[motor_id]["updated_at"] = time.time()
