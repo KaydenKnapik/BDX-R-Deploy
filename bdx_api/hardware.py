@@ -275,7 +275,7 @@ JOINT_LIMITS = {
 CAN_CHANNELS = ["can2", "can1", "can0"]
 
 # Low-pass filter alpha for joint readings
-LPF_ALPHA = 0.1
+LPF_ALPHA = 1.0  # 1.0 = no filtering, raw values pass through
 
 
 # ==========================================
