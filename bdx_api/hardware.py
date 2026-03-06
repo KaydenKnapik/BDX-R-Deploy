@@ -373,11 +373,23 @@ class HardwareBackend(RobotBackend):
             self._filtered_positions[i] = self._motor_states[motor_id]["pos"]
         self._initialized_filter = True
 
-        # --- Stand up to default pose ---
+        # --- Stage 1: Wait for user, then stand up with safe gains ---
+        print("\n" + "=" * 50)
+        print("  MOTORS ENABLED — ROBOT IS LIMP")
+        print("=" * 50)
+        input(">>> Press ENTER to stand up (safe standing gains)...")
+
         self._standup(standup_duration)
 
+        # --- Stage 2: Hold standing pose until user is ready ---
+        self._hold_until_deploy()
+
+        # --- Stage 3: Hand off to policy with trained gains ---
         print("\n" + "=" * 50)
-        print("  HARDWARE READY — POLICY STARTING")
+        print("  DEPLOYING POLICY WITH TRAINED GAINS")
+        print("-" * 50)
+        for i, name in enumerate(self.cfg.joint_names):
+            print(f"  {name:20s}  Kp={self.cfg.joint_stiffness[i]:8.3f}  Kd={self.cfg.joint_damping[i]:8.3f}")
         print("=" * 50)
 
     def _shutdown_buses(self):
@@ -495,6 +507,30 @@ class HardwareBackend(RobotBackend):
             time.sleep(0.02)
 
         print("Standup complete.")
+
+    def _hold_until_deploy(self):
+        """Hold default pose with STANDUP_GAINS until user presses Enter.
+
+        Continuously sends standing-gain commands at ~50 Hz so the robot
+        stays stiff while the user places it on the floor.
+        """
+        print("\nRobot is standing with safe gains. Place it on the floor.")
+        print(">>> Press ENTER to deploy the policy (switches to trained Kp/Kd)...")
+
+        enter_pressed = threading.Event()
+
+        def _wait_for_enter():
+            input()
+            enter_pressed.set()
+
+        waiter = threading.Thread(target=_wait_for_enter, daemon=True)
+        waiter.start()
+
+        target_pos = np.array(self.cfg.default_joint_pos, dtype=np.float32)
+        while not enter_pressed.is_set():
+            self._read_and_filter()
+            self._send_targets(target_pos, use_standup_gains=True)
+            time.sleep(0.02)
 
     # ==========================================
     # RobotBackend implementation
