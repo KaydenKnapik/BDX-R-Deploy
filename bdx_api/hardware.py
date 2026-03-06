@@ -373,24 +373,8 @@ class HardwareBackend(RobotBackend):
             self._filtered_positions[i] = self._motor_states[motor_id]["pos"]
         self._initialized_filter = True
 
-        # --- Stage 1: Wait for user, then stand up with safe gains ---
-        print("\n" + "=" * 50)
-        print("  MOTORS ENABLED — ROBOT IS LIMP")
-        print("=" * 50)
-        input(">>> Press ENTER to stand up (safe standing gains)...")
-
-        self._standup(standup_duration)
-
-        # --- Stage 2: Hold standing pose until user is ready ---
-        self._hold_until_deploy()
-
-        # --- Stage 3: Hand off to policy with trained gains ---
-        print("\n" + "=" * 50)
-        print("  DEPLOYING POLICY WITH TRAINED GAINS")
-        print("-" * 50)
-        for i, name in enumerate(self.cfg.joint_names):
-            print(f"  {name:20s}  Kp={self.cfg.joint_stiffness[i]:8.3f}  Kd={self.cfg.joint_damping[i]:8.3f}")
-        print("=" * 50)
+        self._standup_duration = standup_duration
+        print("\nHardware backend ready.")
 
     def _shutdown_buses(self):
         """Disable all motors and shutdown CAN."""
@@ -491,15 +475,19 @@ class HardwareBackend(RobotBackend):
                 params=params,
             )
 
-    def _standup(self, duration: float):
-        """Smoothly interpolate from current position to default pose."""
-        print(f"Standing up over {duration}s...")
+    # ==========================================
+    # Standup / Hold / Deploy (called by PolicyRunner)
+    # ==========================================
+
+    def standup(self, duration: float = 2.0) -> None:
+        dur = duration if duration else self._standup_duration
+        print(f"Standing up over {dur}s...")
 
         self._read_and_filter()
         start_pos = self._filtered_positions.copy()
         target_pos = np.array(self.cfg.default_joint_pos, dtype=np.float32)
 
-        num_steps = int(duration / 0.02)
+        num_steps = int(dur / 0.02)
         for step in range(num_steps + 1):
             alpha = step / float(num_steps)
             interp = (1.0 - alpha) * start_pos + alpha * target_pos
@@ -508,29 +496,16 @@ class HardwareBackend(RobotBackend):
 
         print("Standup complete.")
 
-    def _hold_until_deploy(self):
-        """Hold default pose with STANDUP_GAINS until user presses Enter.
-
-        Continuously sends standing-gain commands at ~50 Hz so the robot
-        stays stiff while the user places it on the floor.
-        """
-        print("\nRobot is standing with safe gains. Place it on the floor.")
-        print(">>> Press ENTER to deploy the policy (switches to trained Kp/Kd)...")
-
-        enter_pressed = threading.Event()
-
-        def _wait_for_enter():
-            input()
-            enter_pressed.set()
-
-        waiter = threading.Thread(target=_wait_for_enter, daemon=True)
-        waiter.start()
-
+    def hold_standing_tick(self) -> None:
         target_pos = np.array(self.cfg.default_joint_pos, dtype=np.float32)
-        while not enter_pressed.is_set():
-            self._read_and_filter()
-            self._send_targets(target_pos, use_standup_gains=True)
-            time.sleep(0.02)
+        self._read_and_filter()
+        self._send_targets(target_pos, use_standup_gains=True)
+        time.sleep(0.02)
+
+    def activate_policy_gains(self) -> None:
+        # No-op — _send_targets already uses policy gains when
+        # use_standup_gains=False (the default called by set_joint_targets).
+        pass
 
     # ==========================================
     # RobotBackend implementation

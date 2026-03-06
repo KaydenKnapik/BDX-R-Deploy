@@ -195,6 +195,21 @@ class RobotBackend(ABC):
     def get_default_pos_array(self, num_actuators: int) -> np.ndarray:
         ...
 
+    @abstractmethod
+    def standup(self, duration: float = 2.0) -> None:
+        """Smoothly move the robot to its default standing pose with safe gains."""
+        ...
+
+    @abstractmethod
+    def hold_standing_tick(self) -> None:
+        """One control tick holding the standing pose with safe gains."""
+        ...
+
+    @abstractmethod
+    def activate_policy_gains(self) -> None:
+        """Switch from safe standing gains to trained policy Kp/Kd."""
+        ...
+
 
 # ==========================================
 # Policy Runner (Backend-Agnostic)
@@ -292,6 +307,36 @@ class PolicyRunner:
         # Register Ctrl+C handler
         old_handler = signal.signal(signal.SIGINT, self._handle_sigint)
         atexit.register(self._cleanup)
+
+        # === Stage 1: Stand up ===
+        print("\n" + "=" * 50)
+        print("  READY TO STAND")
+        print("=" * 50)
+        input(">>> Press ENTER to stand up (safe standing gains)...")
+        self.backend.standup(duration=2.0)
+
+        # === Stage 2: Hold standing pose ===
+        print("\nRobot is standing with safe gains. Place it on the floor.")
+        print(">>> Press ENTER to deploy the policy (switches to trained Kp/Kd)...")
+
+        enter_pressed = threading.Event()
+        def _wait_for_enter():
+            input()
+            enter_pressed.set()
+        waiter = threading.Thread(target=_wait_for_enter, daemon=True)
+        waiter.start()
+
+        while not enter_pressed.is_set() and self.backend.is_running():
+            self.backend.hold_standing_tick()
+
+        # === Stage 3: Deploy policy ===
+        self.backend.activate_policy_gains()
+        print("\n" + "=" * 50)
+        print("  DEPLOYING POLICY WITH TRAINED GAINS")
+        print("-" * 50)
+        for i, name in enumerate(self.cfg.joint_names):
+            print(f"  {name:20s}  Kp={self.cfg.joint_stiffness[i]:8.3f}  Kd={self.cfg.joint_damping[i]:8.3f}")
+        print("=" * 50)
 
         it = 0
         print_every = int(1.0 / (0.005 * self.decimation))

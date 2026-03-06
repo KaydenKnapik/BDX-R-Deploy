@@ -127,3 +127,30 @@ class MujocoBackend(RobotBackend):
 
     def get_default_pos_array(self, num_actuators: int) -> np.ndarray:
         return np.zeros(self.model.nu, dtype=np.float32)
+
+    # ==========================================
+    # Standup / Hold / Deploy (called by PolicyRunner)
+    # ==========================================
+
+    def standup(self, duration: float = 2.0) -> None:
+        """Hold default pose for `duration` seconds to let the sim settle."""
+        import time as _time
+        print(f"Standing up (settling sim for {duration}s)...")
+        default_ctrl = np.zeros(self.model.nu, dtype=np.float32)
+        joint_map = self.get_joint_map(self.cfg.joint_names)
+        for i, mj_id in enumerate(joint_map):
+            default_ctrl[mj_id] = self.cfg.default_joint_pos[i]
+        self.data.ctrl[:] = default_ctrl
+
+        num_steps = int(duration / self.model.opt.timestep)
+        for _ in range(num_steps):
+            self.step()
+        print("Standup complete.")
+
+    def hold_standing_tick(self) -> None:
+        """One sim step holding the default pose."""
+        self.step()
+
+    def activate_policy_gains(self) -> None:
+        # Gains are already the trained values from ONNX (set at compile time).
+        pass
