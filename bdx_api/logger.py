@@ -8,7 +8,7 @@ Plots everything when Ctrl+C is pressed or the run ends.
 import time
 import numpy as np
 import matplotlib
-matplotlib.use('TkAgg')
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -199,5 +199,5 @@ class RuntimeLogger:
         fig5.savefig(save_path / "commands_actions.png", dpi=150)
         print(f"  Saved: {save_path / 'commands_actions.png'}")
 
-        # Show all
-        plt.show()
+        plt.close('all')
+        print(f"  All plots saved to {save_path}/")

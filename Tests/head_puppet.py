@@ -5,6 +5,10 @@ import math
 import numpy as np
 import sys
 import traceback
+import threading
+import tty
+import termios
+import select
 
 # --- CONFIGURATION ---
 HOST_ID = 0xFD
@@ -122,12 +126,103 @@ def get_motor_params(motor_id):
         raise ValueError(f"Motor ID {motor_id} not found in TYPE MAP.")
     return MOTOR_TYPE_PARAMS[m_type]
 
+# ==========================================
+# Head Keyboard Control
+# ==========================================
+# Joint limits from bdxr.xml (rad)
+HEAD_JOINTS = {
+    #  motor_id: (name, min, max)
+    11: ('Neck_Pitch', -0.349, 0.872),
+    12: ('Head_Pitch', -1.047, 0.872),
+    13: ('Head_Yaw',   -0.872, 0.872),
+    14: ('Head_Roll',  -0.523, 0.523),
+}
+
+# Increment per loop tick (rad). At 400 Hz → ~4.8 rad/s max slew
+STEP = 0.012
+
+# Key bindings:  key → (motor_id, direction)
+#   Neck Pitch : W (+) / S (-)
+#   Head Pitch : R (+) / F (-)
+#   Head Yaw   : A (+) / D (-)
+#   Head Roll  : Q (+) / E (-)
+KEY_MAP = {
+    'w': (11, +1), 's': (11, -1),   # Neck Pitch
+    'r': (12, +1), 'f': (12, -1),   # Head Pitch
+    'a': (13, +1), 'd': (13, -1),   # Head Yaw
+    'q': (14, +1), 'e': (14, -1),   # Head Roll
+}
+
+# Smoothing: commanded position lerps toward the target each tick
+# 0.0 = no smoothing (instant), 1.0 = frozen.
+SMOOTH_ALPHA = 0.5
+
+# Shared state
+head_targets = {mid: 0.0 for mid in HEAD_JOINTS}      # where we WANT to be
+head_commanded = {mid: 0.0 for mid in HEAD_JOINTS}     # what we SEND (smoothed)
+keys_held = set()
+_lock = threading.Lock()
+_stop_event = threading.Event()
+
+_old_term_settings = None
+
+def _restore_terminal():
+    """Ensure terminal is restored no matter how we exit."""
+    if _old_term_settings is not None:
+        try:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _old_term_settings)
+        except Exception:
+            pass
+
+import atexit
+atexit.register(_restore_terminal)
+
+def _key_reader():
+    """Background thread: reads raw keypresses from stdin (no X11 needed)."""
+    global _old_term_settings
+    fd = sys.stdin.fileno()
+    _old_term_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)  # char-at-a-time, no echo
+        while not _stop_event.is_set():
+            if select.select([sys.stdin], [], [], 0.02)[0]:
+                ch = sys.stdin.read(1).lower()
+                if ch == '\x03':  # Ctrl+C
+                    _stop_event.set()
+                    break
+                with _lock:
+                    keys_held.add(ch)
+            else:
+                # No key pressed this tick — clear held keys
+                with _lock:
+                    keys_held.clear()
+    finally:
+        _restore_terminal()
+
+def update_head_targets():
+    """Called once per loop tick — nudges targets for any held keys."""
+    with _lock:
+        held = set(keys_held)
+    for ch in held:
+        if ch in KEY_MAP:
+            mid, direction = KEY_MAP[ch]
+            _, lo, hi = HEAD_JOINTS[mid]
+            head_targets[mid] = np.clip(
+                head_targets[mid] + direction * STEP, lo, hi
+            )
+
 # --- MAIN EXECUTION BLOCK ---
 if __name__ == "__main__":
     buses = {}
 
     print("="*50)
-    print("Holding all motors at 0.0 until Ctrl+C is pressed.")
+    print("Stand + Head Control")
+    print("="*50)
+    print("  Neck Pitch : W / S")
+    print("  Head Pitch : R / F")
+    print("  Head Yaw   : A / D")
+    print("  Head Roll  : Q / E")
+    print("  Ctrl+C to stop")
     print("="*50)
 
     input("Ensure motors are powered. Press Enter to START...")
@@ -152,11 +247,15 @@ if __name__ == "__main__":
         
         time.sleep(1) # Wait for them to wake up
 
-        # --- STEP 2: HOLD AT ZERO ---
-        print(f"\n[2] Moving all motors to 0.0 rad and holding...")
-        print("Press Ctrl+C to stop.")
-        
-        while True:
+        # --- STEP 2: Start keyboard reader thread & hold loop ---
+        key_thread = threading.Thread(target=_key_reader, daemon=True)
+        key_thread.start()
+
+        print(f"\n[2] Standing — use keys to move head. Ctrl+C to stop.")
+        tick = 0
+        while not _stop_event.is_set():
+            update_head_targets()
+
             for interface, motor_ids in CAN_CONFIGS:
                 if interface not in buses: continue
                 bus = buses[interface]
@@ -166,9 +265,28 @@ if __name__ == "__main__":
                 for mid in motor_ids:
                     params = get_motor_params(mid)
                     gains = MOTOR_GAINS[mid]
+                    # Smooth: lerp commanded toward target
+                    if mid in HEAD_JOINTS:
+                        head_commanded[mid] = (
+                            SMOOTH_ALPHA * head_commanded[mid]
+                            + (1.0 - SMOOTH_ALPHA) * head_targets[mid]
+                        )
+                        pos = head_commanded[mid]
+                    else:
+                        pos = 0.0
                     send_control_command(
-                        bus, mid, 0.0, 0.0, gains['kp'], gains['kd'], 0.0, params
+                        bus, mid, pos, 0.0, gains['kp'], gains['kd'], 0.0, params
                     )
+
+            # Print head positions every ~0.5s (every 200 ticks at 400Hz)
+            tick += 1
+            if tick % 200 == 0:
+                vals = "  ".join(
+                    f"{HEAD_JOINTS[m][0]}: {head_targets[m]:+.3f}"
+                    for m in [11, 12, 13, 14]
+                )
+                print(f"\r  {vals}", end="", flush=True)
+
             time.sleep(0.0025) # 400Hz loop rate
 
     except KeyboardInterrupt:
@@ -178,6 +296,7 @@ if __name__ == "__main__":
         traceback.print_exc()
 
     finally:
+        _restore_terminal()
         print(f"\n[Final] Disabling all motors...")
         for interface, motor_ids in CAN_CONFIGS:
             if interface in buses:

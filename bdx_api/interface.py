@@ -3,11 +3,11 @@ import sys
 import time
 import signal
 import atexit
+import threading
 import numpy as np
 import onnxruntime as ort
 from abc import ABC, abstractmethod
 from pathlib import Path
-from pynput import keyboard
 
 from bdx_api.config import load_policy_config, RobotPolicyConfig
 from bdx_api.logger import RuntimeLogger
@@ -28,18 +28,21 @@ def quat_rotate_inverse(q, v):
 
 
 # ==========================================
-# Keyboard Controller
+# Keyboard Controller (works over SSH)
 # ==========================================
 
 class KeyboardController:
-    """Non-blocking keyboard controller using pynput.
+    """Non-blocking keyboard controller using raw terminal input.
+
+    Works over SSH without X11. Falls back to pynput if available
+    and a display is present.
 
     Controls:
-        ↑ / ↓      - Increase / Decrease forward speed
-        ← / →      - Increase / Decrease lateral speed
-        Z / X       - Turn Left / Right
+        W / S       - Increase / Decrease forward speed
+        A / D       - Increase / Decrease lateral speed (strafe)
+        Q / E       - Turn Left / Right
         SPACE       - Stop all movement
-        ESC         - Quit
+        ESC / Ctrl+C - Quit
     """
 
     def __init__(self, lin_vel_step=0.1, ang_vel_step=0.1,
@@ -57,32 +60,83 @@ class KeyboardController:
         self.ang_vel_z_range = ang_vel_z_range
 
         self._quit = False
-        self._listener = keyboard.Listener(on_press=self._on_press)
-        self._listener.daemon = True
-        self._listener.start()
+        self._lock = threading.Lock()
+        self._old_term_settings = None
 
-    def _on_press(self, key):
-        if key == keyboard.Key.up:
-            self.lin_vel_x = min(self.lin_vel_x + self.lin_vel_step, self.lin_vel_x_range[1])
-        elif key == keyboard.Key.down:
-            self.lin_vel_x = max(self.lin_vel_x - self.lin_vel_step, self.lin_vel_x_range[0])
-        elif key == keyboard.Key.left:
-            self.lin_vel_y = min(self.lin_vel_y + self.lin_vel_step, self.lin_vel_y_range[1])
-        elif key == keyboard.Key.right:
-            self.lin_vel_y = max(self.lin_vel_y - self.lin_vel_step, self.lin_vel_y_range[0])
-        elif key == keyboard.Key.space:
-            self.lin_vel_x = 0.0
-            self.lin_vel_y = 0.0
-            self.ang_vel_yaw = 0.0
-        elif key == keyboard.Key.esc:
-            self._quit = True
-        else:
+        # Start background key reader
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._thread.start()
+
+    def _read_loop(self):
+        """Background thread: reads keypresses from stdin."""
+        import tty
+        import termios
+        import select
+
+        fd = sys.stdin.fileno()
+        self._old_term_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while not self._quit:
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch = sys.stdin.read(1)
+                    if ch == '\x1b':
+                        # Could be ESC or arrow key sequence
+                        if select.select([sys.stdin], [], [], 0.01)[0]:
+                            ch2 = sys.stdin.read(1)
+                            if ch2 == '[':
+                                ch3 = sys.stdin.read(1)
+                                # Arrow keys: A=up B=down C=right D=left
+                                if ch3 == 'A':
+                                    ch = 'w'
+                                elif ch3 == 'B':
+                                    ch = 's'
+                                elif ch3 == 'D':
+                                    ch = 'a'
+                                elif ch3 == 'C':
+                                    ch = 'd'
+                                else:
+                                    continue
+                            else:
+                                continue
+                        else:
+                            # Plain ESC
+                            self._quit = True
+                            break
+                    elif ch == '\x03':  # Ctrl+C
+                        self._quit = True
+                        break
+
+                    self._handle_key(ch.lower())
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, self._old_term_settings)
+
+    def _handle_key(self, ch):
+        with self._lock:
+            if ch == 'w':
+                self.lin_vel_x = min(self.lin_vel_x + self.lin_vel_step, self.lin_vel_x_range[1])
+            elif ch == 's':
+                self.lin_vel_x = max(self.lin_vel_x - self.lin_vel_step, self.lin_vel_x_range[0])
+            elif ch == 'a':
+                self.lin_vel_y = min(self.lin_vel_y + self.lin_vel_step, self.lin_vel_y_range[1])
+            elif ch == 'd':
+                self.lin_vel_y = max(self.lin_vel_y - self.lin_vel_step, self.lin_vel_y_range[0])
+            elif ch == 'q':
+                self.ang_vel_yaw = min(self.ang_vel_yaw + self.ang_vel_step, self.ang_vel_z_range[1])
+            elif ch == 'e':
+                self.ang_vel_yaw = max(self.ang_vel_yaw - self.ang_vel_step, self.ang_vel_z_range[0])
+            elif ch == ' ':
+                self.lin_vel_x = 0.0
+                self.lin_vel_y = 0.0
+                self.ang_vel_yaw = 0.0
+
+    def restore_terminal(self):
+        """Restore terminal settings. Safe to call multiple times."""
+        if self._old_term_settings is not None:
             try:
-                if key.char == 'z':
-                    self.ang_vel_yaw = min(self.ang_vel_yaw + self.ang_vel_step, self.ang_vel_z_range[1])
-                elif key.char == 'x':
-                    self.ang_vel_yaw = max(self.ang_vel_yaw - self.ang_vel_step, self.ang_vel_z_range[0])
-            except AttributeError:
+                import termios
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_term_settings)
+            except Exception:
                 pass
 
     @property
@@ -90,11 +144,12 @@ class KeyboardController:
         return self._quit
 
     def get_command(self):
-        return np.array([
-            round(self.lin_vel_x, 2),
-            round(self.lin_vel_y, 2),
-            round(self.ang_vel_yaw, 2),
-        ], dtype=np.float32)
+        with self._lock:
+            return np.array([
+                round(self.lin_vel_x, 2),
+                round(self.lin_vel_y, 2),
+                round(self.ang_vel_yaw, 2),
+            ], dtype=np.float32)
 
 
 # ==========================================
@@ -226,9 +281,9 @@ class PolicyRunner:
         self._interrupted = True
 
     def _cleanup(self):
-        """Stop the keyboard listener and any backend resources."""
+        """Stop the keyboard listener and restore terminal."""
         try:
-            self.kb._listener.stop()
+            self.kb.restore_terminal()
         except Exception:
             pass
 
@@ -244,12 +299,12 @@ class PolicyRunner:
         print("=" * 50)
         print("  KEYBOARD CONTROLS")
         print("-" * 50)
-        print("  ↑ / ↓     Forward / Backward")
-        print("  ← / →     Strafe Left / Right")
-        print("  Z / X     Turn Left / Right")
-        print("  SPACE     Stop all movement")
-        print("  ESC       Quit (no plot)")
-        print("  Ctrl+C    Quit + Plot graphs")
+        print("  W / S       Forward / Backward")
+        print("  A / D       Strafe Left / Right")
+        print("  Q / E       Turn Left / Right")
+        print("  SPACE       Stop all movement")
+        print("  ESC         Quit (no plot)")
+        print("  Ctrl+C      Quit + Plot graphs")
         print("=" * 50)
 
         while self.backend.is_running() and not self.kb.should_quit and not self._interrupted:

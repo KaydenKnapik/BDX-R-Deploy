@@ -41,7 +41,18 @@ MOTOR_TYPE_PARAMS = {
         "KP_MIN": 0.0,   "KP_MAX": 5000.0,
         "KD_MIN": 0.0,   "KD_MAX": 100.0,
     },
+    "O5": {
+        "P_MIN": -12.57, "P_MAX": 12.57,
+        "V_MIN": -50.0,  "V_MAX": 50.0,
+        "T_MIN": -5.5,   "T_MAX": 5.5,
+        "KP_MIN": 0.0,   "KP_MAX": 500.0,
+        "KD_MIN": 0.0,   "KD_MAX": 5.0,
+    },
 }
+
+MUX_ENABLE = 0x03
+MUX_DISABLE = 0x04
+HOST_ID = 0xFD
 
 
 def _scale_to_u16(value, v_min, v_max):
@@ -218,24 +229,45 @@ class BNO055_IMU:
 # The ORDER here must match the ONNX joint_names from the policy metadata.
 # We build this mapping dynamically in __init__ based on the ONNX joint names.
 
-# This is the physical wiring table — maps joint name → (bus_idx, motor_id, motor_type)
+# Physical wiring table — maps joint name → (bus_idx, motor_id, motor_type)
+# bus_idx: 0=can2, 1=can1, 2=can0 (matches CAN_CHANNELS order)
 JOINT_WIRING = {
-    # Legs (can0 = bus 0, can1 = bus 1)
-    "Left_Hip_Yaw":    (1, 5,  "O3"),
-    "Left_Hip_Roll":   (1, 1,  "O3"),
-    "Left_Hip_Pitch":  (1, 2,  "O3"),
-    "Left_Knee":       (1, 3,  "O3"),
-    "Left_Ankle":      (1, 4,  "O2"),
-    "Right_Hip_Yaw":   (0, 19, "O3"),
-    "Right_Hip_Roll":  (0, 18, "O3"),
-    "Right_Hip_Pitch": (0, 16, "O3"),
-    "Right_Knee":      (0, 17, "O3"),
-    "Right_Ankle":     (0, 20, "O2"),
-    # Head (can2 = bus 2)
-    "Neck_Pitch":      (2, 21, "O2"),
-    "Head_Pitch":      (2, 22, "O2"),
-    "Head_Yaw":        (2, 23, "O2"),
-    "Head_Roll":       (2, 24, "O2"),
+    # Left leg (can2 = bus 0)
+    "Left_Hip_Yaw":    (0, 1,  "O3"),
+    "Left_Hip_Roll":   (0, 2,  "O3"),
+    "Left_Hip_Pitch":  (0, 3,  "O3"),
+    "Left_Knee":       (0, 4,  "O3"),
+    "Left_Ankle":      (0, 5,  "O2"),
+    # Right leg (can1 = bus 1)
+    "Right_Hip_Yaw":   (1, 6,  "O3"),
+    "Right_Hip_Roll":  (1, 7,  "O3"),
+    "Right_Hip_Pitch": (1, 8,  "O3"),
+    "Right_Knee":      (1, 9,  "O3"),
+    "Right_Ankle":     (1, 10, "O2"),
+    # Head (can0 = bus 2)
+    "Neck_Pitch":      (2, 11, "O2"),
+    "Head_Pitch":      (2, 12, "O5"),
+    "Head_Yaw":        (2, 13, "O5"),
+    "Head_Roll":       (2, 14, "O5"),
+}
+
+# Safe standup gains — used before the policy takes over
+# Higher than policy gains for stiff, stable standing
+STANDUP_GAINS = {
+    "Left_Hip_Yaw":    (150.957, 5.027),
+    "Left_Hip_Roll":   (150.957, 5.027),
+    "Left_Hip_Pitch":  (150.957, 5.027),
+    "Left_Knee":       (150.957, 5.027),
+    "Left_Ankle":      (50.581,  1.056),
+    "Right_Hip_Yaw":   (150.957, 5.027),
+    "Right_Hip_Roll":  (150.957, 5.027),
+    "Right_Hip_Pitch": (150.957, 5.027),
+    "Right_Knee":      (150.957, 5.027),
+    "Right_Ankle":     (50.581,  1.056),
+    "Neck_Pitch":      (16.581,  1.056),
+    "Head_Pitch":      (5.763,   0.376),
+    "Head_Yaw":        (5.763,   0.376),
+    "Head_Roll":       (5.763,   0.376),
 }
 
 # Joint safety limits (rad)
@@ -256,8 +288,8 @@ JOINT_LIMITS = {
     "Head_Roll":       (-0.52, 0.52),
 }
 
-# CAN bus channels
-CAN_CHANNELS = ["can0", "can1", "can2"]
+# CAN bus channels (order matches bus_idx in JOINT_WIRING)
+CAN_CHANNELS = ["can2", "can1", "can0"]
 
 # Low-pass filter alpha for joint readings
 LPF_ALPHA = 0.1
@@ -272,7 +304,6 @@ class HardwareBackend(RobotBackend):
 
     def __init__(self, model_path: Path, loop_dt: float = 0.005,
                  standup_duration: float = 2.0, i2c_bus: int = 7):
-        import robstride.client
 
         self.cfg = load_policy_config(model_path)
         self.loop_dt = loop_dt
@@ -298,8 +329,6 @@ class HardwareBackend(RobotBackend):
             bus = can.interface.Bus(interface="socketcan", channel=ch)
             self.buses.append(bus)
         atexit.register(self._shutdown_buses)
-
-        self.clients = [robstride.client.Client(bus) for bus in self.buses]
 
         # --- Motor state tracking ---
         self._motor_ids = set()
@@ -331,8 +360,10 @@ class HardwareBackend(RobotBackend):
             if bus_idx not in enabled_on_bus:
                 enabled_on_bus[bus_idx] = set()
             if motor_id not in enabled_on_bus[bus_idx]:
-                _flush_bus(self.buses[bus_idx])
-                self.clients[bus_idx].enable(motor_id)
+                enable_id = (MUX_ENABLE << 24) | (HOST_ID << 8) | motor_id
+                self.buses[bus_idx].send(
+                    can.Message(arbitration_id=enable_id, is_extended_id=True, dlc=8)
+                )
                 enabled_on_bus[bus_idx].add(motor_id)
         time.sleep(0.5)
 
@@ -355,15 +386,14 @@ class HardwareBackend(RobotBackend):
         disabled = set()
         for bus_idx, motor_id, _ in self._joint_wiring:
             if motor_id not in disabled:
-                for attempt in range(3):
-                    try:
-                        _flush_bus(self.buses[bus_idx])
-                        self.clients[bus_idx].disable(motor_id)
-                        break
-                    except Exception as e:
-                        print(f"  Disable attempt {attempt + 1} failed for motor {motor_id}: {e}")
+                disable_id = (MUX_DISABLE << 24) | (HOST_ID << 8) | motor_id
+                try:
+                    self.buses[bus_idx].send(
+                        can.Message(arbitration_id=disable_id, is_extended_id=True, dlc=8)
+                    )
+                except Exception as e:
+                    print(f"  Failed to disable motor {motor_id}: {e}")
                 disabled.add(motor_id)
-                time.sleep(0.05)
 
         for bus in self.buses:
             bus.shutdown()
@@ -417,13 +447,23 @@ class HardwareBackend(RobotBackend):
                 self._filtered_positions[i] = raw_pos
                 self._filtered_velocities[i] = raw_vel
 
-    def _send_targets(self, targets: np.ndarray):
-        """Send position targets with PD gains to all joints."""
+    def _send_targets(self, targets: np.ndarray, use_standup_gains: bool = False):
+        """Send position targets with PD gains to all joints.
+
+        Args:
+            targets: Position targets (rad), one per policy joint.
+            use_standup_gains: If True, use the safe STANDUP_GAINS instead of
+                               the policy-trained gains from ONNX metadata.
+        """
         for i, (bus_idx, motor_id, motor_type) in enumerate(self._joint_wiring):
             name = self.cfg.joint_names[i].strip()
-            kp = self.cfg.joint_stiffness[i]
-            kd = self.cfg.joint_damping[i]
             params = MOTOR_TYPE_PARAMS[motor_type]
+
+            if use_standup_gains and name in STANDUP_GAINS:
+                kp, kd = STANDUP_GAINS[name]
+            else:
+                kp = self.cfg.joint_stiffness[i]
+                kd = self.cfg.joint_damping[i]
 
             # Apply safety limits
             if name in JOINT_LIMITS:
@@ -451,7 +491,7 @@ class HardwareBackend(RobotBackend):
         for step in range(num_steps + 1):
             alpha = step / float(num_steps)
             interp = (1.0 - alpha) * start_pos + alpha * target_pos
-            self._send_targets(interp)
+            self._send_targets(interp, use_standup_gains=True)
             time.sleep(0.02)
 
         print("Standup complete.")
