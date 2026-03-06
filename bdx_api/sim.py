@@ -3,7 +3,7 @@ import mujoco
 import mujoco.viewer
 from pathlib import Path
 
-from bdx_api.config import load_policy_config
+from bdx_api.config import load_policy_config, STANDUP_GAINS
 from bdx_api.interface import RobotBackend, quat_rotate_inverse
 
 
@@ -80,6 +80,43 @@ class MujocoBackend(RobotBackend):
         )
         self.viewer.cam.elevation = -20
 
+        # --- Store actuator index map for runtime gain swapping ---
+        self._act_ids = {}  # joint_name -> mujoco actuator index
+        for name in self.cfg.joint_names:
+            name = name.strip()
+            aid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+            self._act_ids[name] = aid
+
+        # Start with standup gains so the robot is stiff from the start
+        self._apply_standup_gains()
+
+    # --- Gain swapping helpers ---
+
+    def _apply_standup_gains(self):
+        """Set MuJoCo actuator gains to the stiff STANDUP_GAINS."""
+        for i, name in enumerate(self.cfg.joint_names):
+            name = name.strip()
+            aid = self._act_ids[name]
+            if name in STANDUP_GAINS:
+                kp, kd = STANDUP_GAINS[name]
+            else:
+                kp = self.cfg.joint_stiffness[i]
+                kd = self.cfg.joint_damping[i]
+            self.model.actuator_gainprm[aid, 0] = kp
+            self.model.actuator_biasprm[aid, 1] = -kp
+            self.model.actuator_biasprm[aid, 2] = -kd
+
+    def _apply_policy_gains(self):
+        """Set MuJoCo actuator gains to the trained ONNX Kp/Kd."""
+        for i, name in enumerate(self.cfg.joint_names):
+            name = name.strip()
+            aid = self._act_ids[name]
+            kp = self.cfg.joint_stiffness[i]
+            kd = self.cfg.joint_damping[i]
+            self.model.actuator_gainprm[aid, 0] = kp
+            self.model.actuator_biasprm[aid, 1] = -kp
+            self.model.actuator_biasprm[aid, 2] = -kd
+
     # --- RobotBackend implementation ---
 
     def get_imu_angular_velocity(self) -> np.ndarray:
@@ -152,5 +189,5 @@ class MujocoBackend(RobotBackend):
         self.step()
 
     def activate_policy_gains(self) -> None:
-        # Gains are already the trained values from ONNX (set at compile time).
-        pass
+        """Switch MuJoCo actuator gains from standup to trained policy values."""
+        self._apply_policy_gains()

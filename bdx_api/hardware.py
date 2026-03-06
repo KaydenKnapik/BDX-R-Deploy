@@ -9,7 +9,7 @@ import numpy as np
 
 import can
 
-from bdx_api.config import load_policy_config
+from bdx_api.config import load_policy_config, STANDUP_GAINS
 from bdx_api.interface import RobotBackend
 from pathlib import Path
 
@@ -251,24 +251,7 @@ JOINT_WIRING = {
     "Head_Roll":       (2, 14, "O5"),
 }
 
-# Safe standup gains — used before the policy takes over
-# Higher than policy gains for stiff, stable standing
-STANDUP_GAINS = {
-    "Left_Hip_Yaw":    (150.957, 5.027),
-    "Left_Hip_Roll":   (150.957, 5.027),
-    "Left_Hip_Pitch":  (150.957, 5.027),
-    "Left_Knee":       (150.957, 5.027),
-    "Left_Ankle":      (50.581,  1.056),
-    "Right_Hip_Yaw":   (150.957, 5.027),
-    "Right_Hip_Roll":  (150.957, 5.027),
-    "Right_Hip_Pitch": (150.957, 5.027),
-    "Right_Knee":      (150.957, 5.027),
-    "Right_Ankle":     (50.581,  1.056),
-    "Neck_Pitch":      (16.581,  1.056),
-    "Head_Pitch":      (5.763,   0.376),
-    "Head_Yaw":        (5.763,   0.376),
-    "Head_Roll":       (5.763,   0.376),
-}
+# STANDUP_GAINS imported from bdx_api.config
 
 # Joint safety limits (rad)
 JOINT_LIMITS = {
