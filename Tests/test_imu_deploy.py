@@ -25,7 +25,7 @@ def main():
         description="BDX-R Test Deploy — MuJoCo + Real IMU"
     )
     parser.add_argument(
-        "--model", type=str, default="models/new.onnx",
+        "--model", type=str, default="models/walk.onnx",
         help="Path to ONNX policy model",
     )
     parser.add_argument(

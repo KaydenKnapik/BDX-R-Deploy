@@ -25,7 +25,7 @@ import mujoco.viewer
 from pathlib import Path
 from scipy.spatial.transform import Rotation
 
-from bdx_api.imu import IMUReceiver
+from bdx_api.robot_receiver import RobotStateReceiver
 from bdx_api.config import load_policy_config
 
 
@@ -55,12 +55,12 @@ def gravity_to_quat(projected_gravity: np.ndarray, yaw_rad: float = 0.0) -> np.n
 
 def main():
     parser = argparse.ArgumentParser(description="BDX-R IMU Visualizer")
-    parser.add_argument("--model", type=str, default="models/new.onnx",
+    parser.add_argument("--model", type=str, default="models/walk.onnx",
                         help="Path to ONNX model (for joint config)")
     parser.add_argument("--xml", type=str, default="xml/bdxr.xml",
                         help="Path to MuJoCo XML")
-    parser.add_argument("--imu_port", type=int, default=5005,
-                        help="UDP port for IMU data")
+    parser.add_argument("--robot_port", type=int, default=5006,
+                        help="UDP port for robot state (robot_sender.py)")
     args = parser.parse_args()
 
     model_path = Path(args.model)
@@ -127,14 +127,14 @@ def main():
     )
     viewer.cam.elevation = -20
 
-    # --- Start IMU receiver ---
-    imu = IMUReceiver(port=args.imu_port)
-    imu.start()
+    # --- Start robot state receiver ---
+    receiver = RobotStateReceiver(port=args.robot_port)
+    receiver.start()
 
     print("=" * 55)
     print("  IMU VISUALIZER — No policy, pure orientation mirror")
     print("-" * 55)
-    print(f"  Listening for IMU on UDP port {args.imu_port}")
+    print(f"  Listening for robot state on UDP port {args.robot_port}")
     print("  Tilt the real robot and watch the sim follow.")
     print("  Press Ctrl+C or close the viewer to exit.")
     print("=" * 55)
@@ -157,10 +157,10 @@ def main():
             dt = min(now - last_time, 0.1)  # cap dt to avoid jumps
             last_time = now
 
-            data = imu.get_data()
+            data = receiver.get_data()
             gyro = data["gyro"]
             grav = data["projected_gravity"]
-            connected = imu.is_connected()
+            connected = receiver.is_connected()
 
             if connected:
                 # Integrate gyro Z for yaw
@@ -196,7 +196,7 @@ def main():
                 last_print = now
 
     finally:
-        imu.stop()
+        receiver.stop()
         print("\n\nIMU visualizer stopped.")
 
 

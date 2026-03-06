@@ -63,6 +63,10 @@ class RobotStateReceiver:
     def _receive_loop(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+        except Exception:
+            pass
         self.sock.bind(("", self.port))
         self.sock.settimeout(1.0)
 
@@ -107,7 +111,7 @@ class RobotStateReceiver:
 
     def is_connected(self):
         with self.lock:
-            return (time.time() - self.last_packet_time) < 0.5
+            return (time.time() - self.last_packet_time) < 2.0
 
     @staticmethod
     def build_joint_mapping(policy_joint_names: list[str]) -> np.ndarray:

@@ -90,9 +90,9 @@ class IMUReceiver:
             return self.latest_data.copy()
 
     def is_connected(self):
-        """Check if we've received data recently (within 0.5s)."""
+        """Check if we've received data recently (within 2s)."""
         with self.lock:
-            return (time.time() - self.last_packet_time) < 0.5
+            return (time.time() - self.last_packet_time) < 2.0
 
 
 def fmt(arr):
