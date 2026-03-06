@@ -244,7 +244,7 @@
 
             <!-- JOINT: Left_Hip_Roll -->
             <body name="Left_Hip_Roll_Connector" pos="0.0025 -0.018751 -0.04527">
-              <joint name="Left_Hip_Roll" axis="1 0 0" range="-0.349 0.2618" armature="0.02"/>
+              <joint name="Left_Hip_Roll" axis="-1 0 0" range="-0.2618 0.349" armature="0.02"/>
               <inertial pos="0.002336 0.02932 9e-05" mass="0.1" fullinertia="0.000314 7e-05 0.000291 3.6e-05 1e-06 -1e-06"/>
               <geom class="visual" mesh="Left_Hip_Roll_Connector" pos="0.085104 -0.0625 0.040708"/>
 
@@ -276,7 +276,7 @@
                        
                        <!-- JOINT: Left_Knee -->
                        <body name="Left_Lower_Leg" pos="0.045459 -0.0025 0.01829">
-                           <joint name="Left_Knee" axis="0 -1 0" range="-1.309 0.9599" armature="0.02"/>
+                           <joint name="Left_Knee" axis="0 1 0" range="-0.9599 1.309" armature="0.02"/>
                            <inertial pos="0.012283 -0.021155 -0.065391" mass="0.33" fullinertia="0.009108 0.011365 0.003048 0.000146 0.00238 -0.000492"/>
                            <geom class="visual" mesh="Left_Lower_Leg" pos="0.173056 -0.13375 0.117076"/>
                            <body name="Left_Ankle_Cover" pos="0.072419 -0.045377 -0.097578">
@@ -298,13 +298,13 @@
                                        <inertial pos="-0.0795 0.007701 -0.014067" mass="0.08" fullinertia="0.000118 0.001881 0.001957 0 0 0"/>
                                        <geom class="visual" mesh="Left_Foot_Pad" material="silver" pos="0.021227 -0.102728 0.304692"/>
                                        <!-- FIXED: Collision capsules matching training XML exactly -->
-                                       <geom class="collision" name="left_foot_collision1" size="0.01" fromto="-0.152 0.001 -0.013 -0.007 0.001 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                       <geom class="collision" name="left_foot_collision2" size="0.01" fromto="-0.147 0.006 -0.013 -0.012 0.006 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                       <geom class="collision" name="left_foot_collision3" size="0.01" fromto="-0.142 0.011 -0.013 -0.017 0.011 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                       <geom class="collision" name="left_foot_collision4" size="0.01" fromto="-0.142 0.016 -0.013 -0.017 0.016 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                       <geom class="collision" name="left_foot_collision5" size="0.01" fromto="-0.142 0.021 -0.013 -0.017 0.021 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                       <geom class="collision" name="left_foot_collision6" size="0.01" fromto="-0.147 0.026 -0.013 -0.012 0.026 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                       <geom class="collision" name="left_foot_collision7" size="0.01" fromto="-0.152 0.031 -0.013 -0.007 0.031 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision1" size="0.01" fromto="-0.152 -0.009 -0.013 -0.007 -0.009 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision2" size="0.01" fromto="-0.147 -0.004 -0.013 -0.012 -0.004 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision3" size="0.01" fromto="-0.142 0.001 -0.013 -0.017 0.001 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision4" size="0.01" fromto="-0.142 0.006 -0.013 -0.017 0.006 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision5" size="0.01" fromto="-0.142 0.011 -0.013 -0.017 0.011 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision6" size="0.01" fromto="-0.147 0.016 -0.013 -0.012 0.016 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                       <geom class="collision" name="left_foot_collision7" size="0.01" fromto="-0.152 0.021 -0.013 -0.007 0.021 -0.013" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
                                    </body>
                                    <body name="Left_Foot_Cover" pos="0.102636 0.0135 -0.048903">
                                        <inertial pos="-0.053452 -0.014306 0.021311" mass="0.02" fullinertia="0.000477 0.000977 0.000856 0.000178 6.1e-05 3.8e-05"/>
@@ -396,13 +396,13 @@
                                                <inertial pos="-0.0795 0 -0.012327" mass="0.08" fullinertia="0.000118 0.001881 0.001957 0 0 0"/>
                                                <geom class="visual" mesh="Right_Foot_Pad" material="silver" pos="0.021227 0.110385 0.308172"/>
                                                <!-- FIXED: Collision capsules matching training XML exactly -->
-                                               <geom class="collision" name="right_foot_collision1" size="0.01" fromto="-0.152 0.007 -0.012 -0.007 0.007 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                               <geom class="collision" name="right_foot_collision2" size="0.01" fromto="-0.147 0.002 -0.012 -0.012 0.002 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                               <geom class="collision" name="right_foot_collision3" size="0.01" fromto="-0.142 -0.003 -0.012 -0.017 -0.003 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                               <geom class="collision" name="right_foot_collision4" size="0.01" fromto="-0.142 -0.008 -0.012 -0.017 -0.008 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                               <geom class="collision" name="right_foot_collision5" size="0.01" fromto="-0.142 -0.013 -0.012 -0.017 -0.013 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                               <geom class="collision" name="right_foot_collision6" size="0.01" fromto="-0.147 -0.018 -0.012 -0.012 -0.018 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
-                                               <geom class="collision" name="right_foot_collision7" size="0.01" fromto="-0.152 -0.023 -0.012 -0.007 -0.023 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision1" size="0.01" fromto="-0.152 0.017 -0.012 -0.007 0.017 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision2" size="0.01" fromto="-0.147 0.012 -0.012 -0.012 0.012 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision3" size="0.01" fromto="-0.142 0.007 -0.012 -0.017 0.007 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision4" size="0.01" fromto="-0.142 0.002 -0.012 -0.017 0.002 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision5" size="0.01" fromto="-0.142 -0.003 -0.012 -0.017 -0.003 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision6" size="0.01" fromto="-0.147 -0.008 -0.012 -0.012 -0.008 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
+                                               <geom class="collision" name="right_foot_collision7" size="0.01" fromto="-0.152 -0.013 -0.012 -0.007 -0.013 -0.012" condim="3" priority="1" friction="0.6 0.005 0.0001"/>
                                            </body>
                                            <body name="Right_Foot_Cover" pos="-0.041752 -0.0135 -0.042544">
                                                <inertial pos="0.09107 0.014411 0.015231" mass="0.02" fullinertia="0.000512 0.001003 0.000864 -0.000182 5.3e-05 -4.9e-05"/>
