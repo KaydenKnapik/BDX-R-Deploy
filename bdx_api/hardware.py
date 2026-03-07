@@ -90,7 +90,7 @@ def _flush_bus(bus):
 class BNO055_IMU:
     """BNO055 IMU reader running in a background thread."""
 
-    def __init__(self, i2c_bus_num=7, calibration_samples=100, frequency=200.0):
+    def __init__(self, i2c_bus_num=7, calibration_samples=100, frequency=50.0):
         self.i2c_bus_num = i2c_bus_num
         self.calibration_samples = calibration_samples
         self.frequency = frequency
@@ -130,7 +130,10 @@ class BNO055_IMU:
         for i in range(self.calibration_samples):
             gyro = self.sensor.gyro
             gravity = self.sensor.gravity
-            if gyro is not None and gravity is not None:
+            
+            # Ensure valid data without Nones
+            if (gyro is not None and gravity is not None and 
+                None not in gyro and None not in gravity):
                 gyro_data.append(gyro)
                 gravity_data.append(gravity)
             sys.stdout.write(f"\rCollecting samples... {i + 1}/{self.calibration_samples}")
@@ -170,7 +173,11 @@ class BNO055_IMU:
                 try:
                     raw_gyro = self.sensor.gyro
                     gravity_vector = self.sensor.gravity
+                    
+                    # Check if the object is None, OR if it contains None values
                     if raw_gyro is None or gravity_vector is None:
+                        continue
+                    if None in raw_gyro or None in gravity_vector:
                         continue
 
                     # 1. Calibrate raw gyro
@@ -339,7 +346,7 @@ class HardwareBackend(RobotBackend):
 
         # --- Initialize IMU ---
         print("Initializing IMU...")
-        self.imu = BNO055_IMU(i2c_bus_num=i2c_bus, frequency=200.0)
+        self.imu = BNO055_IMU(i2c_bus_num=i2c_bus, frequency=50.0)
         if not self.imu.start():
             raise RuntimeError("IMU initialization failed")
         atexit.register(self.imu.stop)
