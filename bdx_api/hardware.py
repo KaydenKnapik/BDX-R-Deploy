@@ -173,8 +173,14 @@ class BNO055_IMU:
                     if raw_gyro is None or gravity_vector is None:
                         continue
 
+                    # 1. Calibrate raw gyro
                     calibrated_gyro = np.array(raw_gyro) - np.array(self.offsets["gyro"])
+                    
+                    # 2. MATCH ROBOT_SENDER.PY AXES FLIP!
+                    calibrated_gyro[0] *= -1
+                    calibrated_gyro[1] *= -1
 
+                    # 3. Process Gravity (this part was already correct)
                     proj_grav = np.array(gravity_vector)
                     magnitude = np.linalg.norm(proj_grav)
                     if magnitude > 1e-6:
@@ -188,6 +194,7 @@ class BNO055_IMU:
                     aligned[1] *= -1
 
                     with self.lock:
+                        # Save the fixed gyro
                         self.latest_data["gyro"] = calibrated_gyro.astype(np.float32)
                         self.latest_data["projected_gravity"] = aligned.astype(np.float32)
                 except Exception as e:

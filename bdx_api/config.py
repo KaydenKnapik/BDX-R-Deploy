@@ -20,7 +20,7 @@ def resolve_model_path() -> Path:
         return p
 
     project_root = Path(__file__).resolve().parent.parent
-    default_path = project_root / "models" / "walk.onnx"
+    default_path = project_root / "models" / "new.onnx"
 
     if not default_path.exists():
         raise FileNotFoundError(

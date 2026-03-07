@@ -10,7 +10,7 @@ def main():
     parser = argparse.ArgumentParser(description="BDX-R Deploy — sim or real")
     parser.add_argument("--backend", type=str, default="sim", choices=["sim", "real"],
                         help="Backend: 'sim' for MuJoCo, 'real' for hardware")
-    parser.add_argument("--model", type=str, default="models/walk.onnx",
+    parser.add_argument("--model", type=str, default="models/new.onnx",
                         help="Path to ONNX policy model")
     parser.add_argument("--xml", type=str, default="xml/bdxr.xml",
                         help="Path to MuJoCo XML (sim only)")
