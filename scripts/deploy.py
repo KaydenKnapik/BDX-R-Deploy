@@ -52,35 +52,39 @@ def main():
     # ==========================================
     # CSV EXPORT (Flight Recorder)
     # ==========================================
+# ==========================================
+    # CSV EXPORT (Flight Recorder)
+    # ==========================================
     entries = runner.logger.entries
     if len(entries) > 1:
         os.makedirs("logs", exist_ok=True)
         csv_path = "logs/latest_run.csv"
         print(f"\nSaving {len(entries)} frames to {csv_path}...")
         
+        import csv
         with open(csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
             
-            # Build Header
-            num_joints = len(entries[0]["actual_pos"])
-            header =["tick"]
-            header += [f"cmd_{i}" for i in range(3)]
-            header += [f"ang_vel_{i}" for i in range(3)]
+            # Build Header (Notice the dot notation instead of brackets)
+            num_joints = len(entries[0].actual_pos)
+            header = ["tick"]
+            header +=[f"cmd_{i}" for i in range(3)]
+            header +=[f"ang_vel_{i}" for i in range(3)]
             header +=[f"proj_grav_{i}" for i in range(3)]
-            header +=[f"pos_{i}" for i in range(num_joints)]
-            header +=[f"vel_{i}" for i in range(num_joints)]
+            header += [f"pos_{i}" for i in range(num_joints)]
+            header += [f"vel_{i}" for i in range(num_joints)]
             header += [f"action_{i}" for i in range(num_joints)]
             writer.writerow(header)
 
             # Write Data
             for i, entry in enumerate(entries):
                 row = [i]
-                row.extend(entry["cmd"])
-                row.extend(entry["ang_vel"])
-                row.extend(entry["projected_gravity"])
-                row.extend(entry["actual_pos"])
-                row.extend(entry["actual_vel"])
-                row.extend(entry["actions"])
+                row.extend(entry.cmd)
+                row.extend(entry.ang_vel)
+                row.extend(entry.projected_gravity)
+                row.extend(entry.actual_pos)
+                row.extend(entry.actual_vel)
+                row.extend(entry.actions)
                 writer.writerow(row)
         print("CSV saved successfully.")
 
