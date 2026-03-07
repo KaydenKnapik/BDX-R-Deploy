@@ -289,7 +289,7 @@ JOINT_LIMITS = {
 CAN_CHANNELS = ["can2", "can1", "can0"]
 
 # Low-pass filter alpha for joint readings
-LPF_ALPHA = 1.0  # 1.0 = no filtering, raw values pass through
+LPF_ALPHA = 1.0 # 1.0 = no filtering, raw values pass through
 
 
 # ==========================================
@@ -306,6 +306,14 @@ class HardwareBackend(RobotBackend):
         self.loop_dt = loop_dt
         self._running = True
         self._last_time = time.time()
+
+        # ========================================================
+        # [DEBUG] Frequency Counters
+        # ========================================================
+        self._debug_tick_count = 0
+        self._debug_start_time = time.time()
+        self._actual_cmd_freq = 0.0
+        # ========================================================
 
         # --- Validate all policy joints are wired ---
         self.num_joints = len(self.cfg.joint_names)
@@ -548,6 +556,20 @@ class HardwareBackend(RobotBackend):
             time.sleep(sleep_time)
         self._last_time = time.time()
 
+        # ========================================================
+        # [DEBUG] Calculate Actual Loop Frequency
+        # ========================================================
+        self._debug_tick_count += 1
+        # Update freq calculation every 50 ticks (approx 0.25s)
+        if self._debug_tick_count >= 50:
+            now = time.time()
+            duration = now - self._debug_start_time
+            if duration > 0:
+                self._actual_cmd_freq = self._debug_tick_count / duration
+            self._debug_tick_count = 0
+            self._debug_start_time = now
+        # ========================================================
+
     def is_running(self) -> bool:
         return self._running
 
@@ -558,3 +580,7 @@ class HardwareBackend(RobotBackend):
 
     def get_default_pos_array(self, num_actuators: int) -> np.ndarray:
         return np.zeros(num_actuators, dtype=np.float32)
+
+    def get_actual_frequency(self) -> float:
+        """Return the measured loop frequency in Hz."""
+        return self._actual_cmd_freq

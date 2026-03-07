@@ -214,7 +214,6 @@ class RobotBackend(ABC):
 # ==========================================
 # Policy Runner (Backend-Agnostic)
 # ==========================================
-
 class PolicyRunner:
     """Runs the ONNX policy on any RobotBackend."""
 
@@ -339,7 +338,11 @@ class PolicyRunner:
         print("=" * 50)
 
         it = 0
-        print_every = int(1.0 / (0.005 * self.decimation))
+        
+        # [DEBUG] Policy Frequency Tracking
+        policy_counter = 0
+        policy_start_time = time.time()
+        actual_policy_freq = 0.0
 
         print("=" * 50)
         print("  KEYBOARD CONTROLS")
@@ -351,14 +354,11 @@ class PolicyRunner:
         print("  ESC         Quit (no plot)")
         print("  Ctrl+C      Quit + Plot graphs")
         print("=" * 50)
+        print("\n") # Spacing for the updating line
 
         while self.backend.is_running() and not self.kb.should_quit and not self._interrupted:
             if it % self.decimation == 0:
                 cmd = self.kb.get_command()
-
-                if it % (self.decimation * print_every) == 0:
-                    print(f"\r  Fwd: {cmd[0]:+.2f}  Lat: {cmd[1]:+.2f}  Yaw: {cmd[2]:+.2f}  "
-                          f"[{len(self.logger.entries)} samples]", end="", flush=True)
 
                 # Read sensors
                 ang_vel = self.backend.get_imu_angular_velocity()
@@ -401,6 +401,33 @@ class PolicyRunner:
                     projected_gravity=projected_gravity,
                     actions=self.actions,
                 )
+
+                # ========================================================
+                # [DEBUG] Calc Policy Freq & Update Print
+                # ========================================================
+                policy_counter += 1
+                if policy_counter >= 10:  # Calc every 10 inferences (approx 0.2s)
+                    now = time.time()
+                    actual_policy_freq = policy_counter / (now - policy_start_time)
+                    policy_counter = 0
+                    policy_start_time = now
+                
+                # Get Backend Freq (Joint Cmds)
+                backend_freq = 0.0
+                if hasattr(self.backend, 'get_actual_frequency'):
+                    backend_freq = self.backend.get_actual_frequency()
+
+                # Print Status (updates in place)
+                # We print every decimation step so it looks smooth
+                status_str = (
+                    f"Cmds(Backend): {backend_freq:5.1f} Hz | "
+                    f"Policy: {actual_policy_freq:5.1f} Hz | "
+                    f"CMD [X:{cmd[0]:+0.1f} Y:{cmd[1]:+0.1f} W:{cmd[2]:+0.1f}]"
+                )
+                
+                sys.stdout.write(f"\r{status_str}   ") # Spaces to clear end of line
+                sys.stdout.flush()
+                # ========================================================
 
             self.backend.set_joint_targets(self.dof_targets)
             self.backend.step()
