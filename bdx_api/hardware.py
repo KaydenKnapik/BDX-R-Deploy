@@ -6,7 +6,6 @@ import struct
 import threading
 import atexit
 import numpy as np
-
 import can
 
 from bdx_api.config import load_policy_config, STANDUP_GAINS
@@ -20,10 +19,8 @@ from pathlib import Path
 
 MUX_CONTROL = 0x01
 
-
 class MotorMsg(enum.Enum):
     Feedback = 2
-
 
 # Motor type parameters for scaling
 MOTOR_TYPE_PARAMS = {
@@ -54,10 +51,8 @@ MUX_ENABLE = 0x03
 MUX_DISABLE = 0x04
 HOST_ID = 0xFD
 
-
 def _scale_to_u16(value, v_min, v_max):
     return int(65535.0 * (np.clip(value, v_min, v_max) - v_min) / (v_max - v_min))
-
 
 def _send_mit_command(bus, motor_id, pos_rad, vel_rad_s, kp, kd, torque_nm, params):
     """Send a single MIT mode position command to a motor."""
@@ -74,7 +69,6 @@ def _send_mit_command(bus, motor_id, pos_rad, vel_rad_s, kp, kd, torque_nm, para
         bus.send(can.Message(arbitration_id=arb_id, data=data, is_extended_id=True, dlc=8))
     except can.CanError as e:
         print(f"[CAN ERROR] Motor {motor_id}: {e}", file=sys.stderr)
-
 
 def _flush_bus(bus):
     while True:
@@ -126,7 +120,7 @@ class BNO055_IMU:
         time.sleep(2)
 
         gyro_data = []
-        gravity_data = []
+        gravity_data =[]
         for i in range(self.calibration_samples):
             gyro = self.sensor.gyro
             gravity = self.sensor.gravity
@@ -187,7 +181,7 @@ class BNO055_IMU:
                     calibrated_gyro[0] *= -1
                     calibrated_gyro[1] *= -1
 
-                    # 3. Process Gravity (this part was already correct)
+                    # 3. Process Gravity 
                     proj_grav = np.array(gravity_vector)
                     magnitude = np.linalg.norm(proj_grav)
                     if magnitude > 1e-6:
@@ -239,35 +233,23 @@ class BNO055_IMU:
 # Joint Definition
 # ==========================================
 
-# Each entry: (policy_joint_name, can_bus_index, motor_id, motor_type)
-# The ORDER here must match the ONNX joint_names from the policy metadata.
-# We build this mapping dynamically in __init__ based on the ONNX joint names.
-
-# Physical wiring table — maps joint name → (bus_idx, motor_id, motor_type)
-# bus_idx: 0=can2, 1=can1, 2=can0 (matches CAN_CHANNELS order)
 JOINT_WIRING = {
-    # Left leg (can2 = bus 0)
     "Left_Hip_Yaw":    (0, 1,  "O3"),
     "Left_Hip_Roll":   (0, 2,  "O3"),
     "Left_Hip_Pitch":  (0, 3,  "O3"),
     "Left_Knee":       (0, 4,  "O3"),
     "Left_Ankle":      (0, 5,  "O2"),
-    # Right leg (can1 = bus 1)
     "Right_Hip_Yaw":   (1, 6,  "O3"),
     "Right_Hip_Roll":  (1, 7,  "O3"),
     "Right_Hip_Pitch": (1, 8,  "O3"),
     "Right_Knee":      (1, 9,  "O3"),
     "Right_Ankle":     (1, 10, "O2"),
-    # Head (can0 = bus 2)
     "Neck_Pitch":      (2, 11, "O2"),
     "Head_Pitch":      (2, 12, "O5"),
     "Head_Yaw":        (2, 13, "O5"),
     "Head_Roll":       (2, 14, "O5"),
 }
 
-# STANDUP_GAINS imported from bdx_api.config
-
-# Joint safety limits (rad)
 JOINT_LIMITS = {
     "Left_Hip_Yaw":    (-0.4, 0.4),
     "Left_Hip_Roll":   (-0.34, 0.34),
@@ -285,11 +267,8 @@ JOINT_LIMITS = {
     "Head_Roll":       (-0.52, 0.52),
 }
 
-# CAN bus channels (order matches bus_idx in JOINT_WIRING)
-CAN_CHANNELS = ["can2", "can1", "can0"]
-
-# Low-pass filter alpha for joint readings
-LPF_ALPHA = 1.0 # 1.0 = no filtering, raw values pass through
+CAN_CHANNELS =["can2", "can1", "can0"]
+LPF_ALPHA = 1.0
 
 
 # ==========================================
@@ -297,8 +276,6 @@ LPF_ALPHA = 1.0 # 1.0 = no filtering, raw values pass through
 # ==========================================
 
 class HardwareBackend(RobotBackend):
-    """Real robot backend using Robstride motors over CAN + BNO055 IMU."""
-
     def __init__(self, model_path: Path, loop_dt: float = 0.005,
                  standup_duration: float = 2.0, i2c_bus: int = 7):
 
@@ -307,37 +284,35 @@ class HardwareBackend(RobotBackend):
         self._running = True
         self._last_time = time.time()
 
-        # ========================================================
-        # [DEBUG] Frequency Counters
-        # ========================================================
+        # Debug Freq Counters
         self._debug_tick_count = 0
         self._debug_start_time = time.time()
         self._actual_cmd_freq = 0.0
-        # ========================================================
 
-        # --- Validate all policy joints are wired ---
+        # --- NEW: Asimov Latency Tracking ---
+        self._cmd_sent_time = {}
+        self._latencies = {}
+
         self.num_joints = len(self.cfg.joint_names)
-        self._joint_wiring = []
+        self._joint_wiring =[]
         for name in self.cfg.joint_names:
             name = name.strip()
             if name not in JOINT_WIRING:
                 raise ValueError(f"Policy joint '{name}' has no entry in JOINT_WIRING.")
             self._joint_wiring.append(JOINT_WIRING[name])
 
-        # --- Build motor_id → motor_type lookup for feedback decoding ---
         self._motor_type_by_id = {}
         for bus_idx, motor_id, motor_type in self._joint_wiring:
             self._motor_type_by_id[motor_id] = motor_type
+            self._latencies[motor_id] =[] # Initialize latency list
 
-        # --- Initialize CAN buses ---
         print("Initializing CAN buses...")
-        self.buses = []
+        self.buses =[]
         for ch in CAN_CHANNELS:
             bus = can.interface.Bus(interface="socketcan", channel=ch)
             self.buses.append(bus)
         atexit.register(self._shutdown_buses)
 
-        # --- Motor state tracking ---
         self._motor_ids = set()
         for bus_idx, motor_id, _ in self._joint_wiring:
             self._motor_ids.add(motor_id)
@@ -347,22 +322,19 @@ class HardwareBackend(RobotBackend):
             for motor_id in self._motor_ids
         }
 
-        # --- Filtered joint state ---
         self._filtered_positions = np.zeros(self.num_joints, dtype=np.float32)
         self._filtered_velocities = np.zeros(self.num_joints, dtype=np.float32)
         self._initialized_filter = False
 
-        # --- Initialize IMU ---
         print("Initializing IMU...")
         self.imu = BNO055_IMU(i2c_bus_num=i2c_bus, frequency=50.0)
         if not self.imu.start():
             raise RuntimeError("IMU initialization failed")
         atexit.register(self.imu.stop)
 
-        # --- Enable motors ---
         print("Enabling all motors...")
         time.sleep(0.5)
-        enabled_on_bus = {}  # bus_idx → set of motor_ids already enabled
+        enabled_on_bus = {}
         for bus_idx, motor_id, _ in self._joint_wiring:
             if bus_idx not in enabled_on_bus:
                 enabled_on_bus[bus_idx] = set()
@@ -374,7 +346,6 @@ class HardwareBackend(RobotBackend):
                 enabled_on_bus[bus_idx].add(motor_id)
         time.sleep(0.5)
 
-        # --- Read initial positions ---
         self._update_motor_states()
         for i, (bus_idx, motor_id, _) in enumerate(self._joint_wiring):
             self._filtered_positions[i] = self._motor_states[motor_id]["pos"]
@@ -384,7 +355,6 @@ class HardwareBackend(RobotBackend):
         print("\nHardware backend ready.")
 
     def _shutdown_buses(self):
-        """Disable all motors and shutdown CAN."""
         print("Disabling all motors...")
         disabled = set()
         for bus_idx, motor_id, _ in self._joint_wiring:
@@ -395,7 +365,7 @@ class HardwareBackend(RobotBackend):
                         can.Message(arbitration_id=disable_id, is_extended_id=True, dlc=8)
                     )
                 except Exception as e:
-                    print(f"  Failed to disable motor {motor_id}: {e}")
+                    pass
                 disabled.add(motor_id)
 
         for bus in self.buses:
@@ -403,7 +373,6 @@ class HardwareBackend(RobotBackend):
         print("CAN buses shut down.")
 
     def _update_motor_states(self):
-        """Read all pending CAN feedback messages and decode using correct motor type."""
         for bus in self.buses:
             while True:
                 msg = bus.recv(timeout=0)
@@ -421,17 +390,22 @@ class HardwareBackend(RobotBackend):
                 if motor_id not in self._motor_states:
                     continue
 
-                # Look up motor type for correct velocity scaling
+                # --- NEW: Asimov Latency Calculation ---
+                now = time.perf_counter()
+                if motor_id in self._cmd_sent_time:
+                    lat = now - self._cmd_sent_time[motor_id]
+                    self._latencies[motor_id].append(lat)
+                    if len(self._latencies[motor_id]) > 100:
+                        self._latencies[motor_id].pop(0)
+
                 motor_type = self._motor_type_by_id.get(motor_id, "O3")
                 params = MOTOR_TYPE_PARAMS[motor_type]
 
                 try:
-                    # Position decoding (same for all types: ±12.57 rad)
                     angle_raw = struct.unpack(">H", msg.data[0:2])[0]
                     p_range = params["P_MAX"] - params["P_MIN"]
                     pos_rad = (float(angle_raw) / 65535.0) * p_range + params["P_MIN"]
 
-                    # Velocity decoding (varies by motor type)
                     vel_raw = struct.unpack(">H", msg.data[2:4])[0]
                     v_range = params["V_MAX"] - params["V_MIN"]
                     vel_rps = (float(vel_raw) / 65535.0) * v_range + params["V_MIN"]
@@ -443,7 +417,6 @@ class HardwareBackend(RobotBackend):
                     pass
 
     def _read_and_filter(self):
-        """Read motor states and apply LPF."""
         self._update_motor_states()
 
         for i, (bus_idx, motor_id, _) in enumerate(self._joint_wiring):
@@ -462,13 +435,6 @@ class HardwareBackend(RobotBackend):
                 self._filtered_velocities[i] = raw_vel
 
     def _send_targets(self, targets: np.ndarray, use_standup_gains: bool = False):
-        """Send position targets with PD gains to all joints.
-
-        Args:
-            targets: Position targets (rad), one per policy joint.
-            use_standup_gains: If True, use the safe STANDUP_GAINS instead of
-                               the policy-trained gains from ONNX metadata.
-        """
         for i, (bus_idx, motor_id, motor_type) in enumerate(self._joint_wiring):
             name = self.cfg.joint_names[i].strip()
             params = MOTOR_TYPE_PARAMS[motor_type]
@@ -479,12 +445,14 @@ class HardwareBackend(RobotBackend):
                 kp = self.cfg.joint_stiffness[i]
                 kd = self.cfg.joint_damping[i]
 
-            # Apply safety limits
             if name in JOINT_LIMITS:
                 lo, hi = JOINT_LIMITS[name]
                 pos = float(np.clip(targets[i], lo, hi))
             else:
                 pos = float(targets[i])
+
+            # --- NEW: Record send time for latency measurement ---
+            self._cmd_sent_time[motor_id] = time.perf_counter()
 
             _send_mit_command(
                 self.buses[bus_idx], motor_id,
@@ -492,10 +460,6 @@ class HardwareBackend(RobotBackend):
                 kp=kp, kd=kd, torque_nm=0.0,
                 params=params,
             )
-
-    # ==========================================
-    # Standup / Hold / Deploy (called by PolicyRunner)
-    # ==========================================
 
     def standup(self, duration: float = 2.0) -> None:
         dur = duration if duration else self._standup_duration
@@ -521,13 +485,14 @@ class HardwareBackend(RobotBackend):
         time.sleep(0.02)
 
     def activate_policy_gains(self) -> None:
-        # No-op — _send_targets already uses policy gains when
-        # use_standup_gains=False (the default called by set_joint_targets).
-        pass
-
-    # ==========================================
-    # RobotBackend implementation
-    # ==========================================
+        # --- NEW: Flush "Ghost" commands and stale data ---
+        print("\n[DEBUG] Activating Policy: Flushing CAN Bus to prevent cold-start jerk...")
+        for bus in self.buses:
+            _flush_bus(bus)
+        
+        # Read the exact current state and reset the filter so it doesn't try to blend history
+        self._read_and_filter()
+        print("[DEBUG] Hardware buffers flushed.")
 
     def get_imu_angular_velocity(self) -> np.ndarray:
         return self.imu.get_latest_data()["gyro"]
@@ -543,24 +508,16 @@ class HardwareBackend(RobotBackend):
         return self._filtered_velocities[joint_ids].copy()
 
     def set_joint_targets(self, targets: np.ndarray) -> None:
-        # targets is the full default_pos-sized array from PolicyRunner
-        # We need to extract just our joints (ordered by policy index)
-        # PolicyRunner sets targets[joint_map[i]], and our joint_map is identity (0..N-1)
         self._send_targets(targets)
 
     def step(self) -> None:
-        # Maintain fixed loop rate
         elapsed = time.time() - self._last_time
         sleep_time = self.loop_dt - elapsed
         if sleep_time > 0:
             time.sleep(sleep_time)
         self._last_time = time.time()
 
-        # ========================================================
-        # [DEBUG] Calculate Actual Loop Frequency
-        # ========================================================
         self._debug_tick_count += 1
-        # Update freq calculation every 50 ticks (approx 0.25s)
         if self._debug_tick_count >= 50:
             now = time.time()
             duration = now - self._debug_start_time
@@ -568,19 +525,27 @@ class HardwareBackend(RobotBackend):
                 self._actual_cmd_freq = self._debug_tick_count / duration
             self._debug_tick_count = 0
             self._debug_start_time = now
-        # ========================================================
 
     def is_running(self) -> bool:
         return self._running
 
     def get_joint_map(self, joint_names: list[str]) -> np.ndarray:
-        # On hardware, policy joint index i maps directly to index i
-        # (the _joint_wiring list is already ordered by policy joint order)
         return np.arange(len(joint_names), dtype=int)
 
     def get_default_pos_array(self, num_actuators: int) -> np.ndarray:
         return np.zeros(num_actuators, dtype=np.float32)
 
     def get_actual_frequency(self) -> float:
-        """Return the measured loop frequency in Hz."""
         return self._actual_cmd_freq
+    
+    # --- NEW: Get CAN Latency Stats ---
+    def get_latency_stats(self):
+        stats = {}
+        for mid, lats in self._latencies.items():
+            if len(lats) > 0:
+                stats[mid] = {
+                    "avg": np.mean(lats) * 1000.0,
+                    "max": np.max(lats) * 1000.0,
+                    "std": np.std(lats) * 1000.0
+                }
+        return stats
