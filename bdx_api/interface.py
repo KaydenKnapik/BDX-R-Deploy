@@ -148,7 +148,12 @@ class PolicyRunner:
             self.default_pos[mj_id] = self.cfg.default_joint_pos[i]
 
         self.action_scale = np.array(self.cfg.action_scale, dtype=np.float32)
-        self.actions = np.zeros(len(self.cfg.joint_names), dtype=np.float32)
+        
+        # --- NEW: Interpolation Variables ---
+        self.new_actions = np.zeros(len(self.cfg.joint_names), dtype=np.float32)
+        self.prev_actions = np.zeros(len(self.cfg.joint_names), dtype=np.float32)
+        self.current_interpolated_actions = np.zeros(len(self.cfg.joint_names), dtype=np.float32)
+        
         self.dof_targets = self.default_pos.copy()
 
         self.kb = KeyboardController()
@@ -195,23 +200,21 @@ class PolicyRunner:
         self.backend.activate_policy_gains()
         
         print("\n" + "=" * 50)
-        print("  DEPLOYING POLICY (DEBUG MODE - SAFETY OVERRIDE ACTIVE)")
-        print("-" * 50)
-        print("  !!! THE ROBOT WILL NOT MOVE - HOLDING POS ONLY !!!")
+        print("  DEPLOYING POLICY (LIVE MODE)")
         print("=" * 50)
 
         it = 0
-        policy_counter = 0
-        policy_start_time = time.time()
-        actual_policy_freq = 0.0
-        
-        # --- NEW: Loop timings tracking for Jitter ---
         loop_times =[]
+        
+        # --- NEW: Frequency Tracking ---
+        freq_start_time = time.time()
+        ctrl_ticks = 0
+        policy_ticks = 0
 
         while self.backend.is_running() and not self.kb.should_quit and not self._interrupted:
-            # High-res start time for latency test
             loop_start = time.perf_counter()
 
+            # --- POLICY UPDATE STEP (e.g. 50Hz) ---
             if it % self.decimation == 0:
                 cmd = self.kb.get_command()
 
@@ -227,20 +230,17 @@ class PolicyRunner:
                     elif term == "base_ang_vel": obs_parts.append(ang_vel)
                     elif term in ("joint_pos", "dof_pos"): obs_parts.append(dof_pos - self.default_pos[self.joint_map])
                     elif term in ("joint_vel", "dof_vel"): obs_parts.append(dof_vel)
-                    elif term == "actions": obs_parts.append(self.actions)
+                    elif term == "actions": obs_parts.append(self.new_actions)
                     elif term in ("command", "commands"): obs_parts.append(cmd)
 
                 obs = np.concatenate(obs_parts).astype(np.float32)
 
-                # Run policy
-                self.actions = self.session.run(None, {self.input_name: obs.reshape(1, -1)})[0][0]
+                # Store old actions and predict new ones
+                self.prev_actions = self.new_actions.copy()
+                self.new_actions = self.session.run(None, {self.input_name: obs.reshape(1, -1)})[0][0]
                 
-                # =================================================================
-                # [SAFETY OVERRIDE] HOLD ZERO POS
-                # We completely ignore the policy output for the hardware commands.
-                # =================================================================
-                self.dof_targets[self.joint_map] = self.default_pos[self.joint_map].copy()
-                
+                policy_ticks += 1
+
                 self.logger.log(
                     cmd=cmd,
                     target_pos=self.dof_targets[self.joint_map],
@@ -248,48 +248,64 @@ class PolicyRunner:
                     actual_vel=dof_vel,
                     ang_vel=ang_vel,
                     projected_gravity=projected_gravity,
-                    actions=self.actions, # Logs the simulated actions to CSV
+                    actions=self.new_actions, 
                 )
 
-                policy_counter += 1
-                if policy_counter >= 10:
-                    now = time.time()
-                    actual_policy_freq = policy_counter / (now - policy_start_time)
-                    policy_counter = 0
-                    policy_start_time = now
+            # --- CONTROL INTERPOLATION STEP (e.g. 200Hz) ---
+            if self.decimation > 1:
+                alpha = (it % self.decimation) / float(self.decimation - 1)
+                self.current_interpolated_actions = (1.0 - alpha) * self.prev_actions + (alpha * self.new_actions)
+            else:
+                self.current_interpolated_actions = self.new_actions
+
+            # Calculate final targets using the smoothed action
+            action_delta = self.current_interpolated_actions * self.action_scale
+            self.dof_targets[self.joint_map] = self.default_pos[self.joint_map] + action_delta
+            
+            # =================================================================
+            # [SAFETY OVERRIDE] 
+            # If you want to test hardware WITHOUT the legs moving, uncomment this:
+            #self.dof_targets[self.joint_map] = self.default_pos[self.joint_map].copy()
+            # =================================================================
 
             self.backend.set_joint_targets(self.dof_targets)
             self.backend.step()
+            ctrl_ticks += 1
             
-            # --- NEW: Stop high-res timer ---
             loop_end = time.perf_counter()
             loop_times.append(loop_end - loop_start)
 
-            # --- NEW: Debug Block (Runs every ~0.5 seconds) ---
+            # --- DEBUG CONSOLE OUTPUT (Runs every ~0.5 seconds) ---
             if it % 100 == 0 and it > 0:
-                l_arr = np.array(loop_times) * 1000 # Convert to ms
-                loop_times =[] # reset buffer
+                l_arr = np.array(loop_times) * 1000 
+                loop_times =[] 
+                
+                # Calculate actual frequencies
+                now = time.time()
+                dt = now - freq_start_time
+                actual_ctrl_hz = ctrl_ticks / dt
+                actual_pol_hz = policy_ticks / dt
+                
+                # Reset tracking variables
+                freq_start_time = now
+                ctrl_ticks = 0
+                policy_ticks = 0
 
-                print("\n" + "-"*50)
+                print("\n" + "-"*55)
                 print(f"[DEBUG TICK {it}]")
-                # 1. Loop Timing (Jitter)
+                print(f"  Frequencies:   Control = {actual_ctrl_hz:5.1f} Hz | Policy = {actual_pol_hz:5.1f} Hz")
                 print(f"  Loop Timing:   Avg {l_arr.mean():.2f}ms | Max {l_arr.max():.2f}ms | Std {l_arr.std():.2f}ms")
                 
-                # 2. CAN Latency (from backend if hardware)
                 if hasattr(self.backend, 'get_latency_stats'):
                     lats = self.backend.get_latency_stats()
                     if len(lats) > 0:
-                        first_motor = list(lats.keys())[0]
-                        print(f"  CAN Latency:   Motor {first_motor} -> Max: {lats[first_motor]['max']:5.2f}ms | Std: {lats[first_motor]['std']:5.2f}ms")
+                        worst_max = max([stats['max'] for stats in lats.values()])
+                        worst_avg = max([stats['avg'] for stats in lats.values()])
+                        print(f"  CAN Latency:   Worst Avg: {worst_avg:.2f}ms | Worst Max: {worst_max:.2f}ms")
                 
-                # 3. Network Outputs (Are they sane?)
-                print(f"  Actions Out:   Min: {self.actions.min():5.2f} | Max: {self.actions.max():5.2f}")
-                print(f"  Raw Actions[0:3]: {self.actions[0:3]}")
-                
-                # 4. Sensor Inputs (Is gravity drifting?)
                 print(f"  Proj Gravity:  {projected_gravity}")
-                print(f"  Commanded Pos: {self.dof_targets[0:3]} (SAFETY LOCKED)")
-                print("-" * 50)
+                print(f"  Interpolated Actions[0:3]: {self.current_interpolated_actions[0:14]}")
+                print("-" * 55)
                 
             it += 1
 
@@ -300,7 +316,5 @@ class PolicyRunner:
         if self._interrupted and len(self.logger.entries) > 1:
             print("\nGenerating plots...")
             self.logger.plot(save_dir="logs")
-        elif len(self.logger.entries) > 1:
-            print("(Press Ctrl+C next time to auto-plot, or run logger.plot() manually)")
 
         print("Shutting down.")

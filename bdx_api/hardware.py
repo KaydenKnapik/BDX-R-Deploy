@@ -11,6 +11,7 @@ import can
 from bdx_api.config import load_policy_config, STANDUP_GAINS
 from bdx_api.interface import RobotBackend
 from pathlib import Path
+from scipy.spatial.transform import Rotation
 
 
 # ==========================================
@@ -51,6 +52,10 @@ MUX_ENABLE = 0x03
 MUX_DISABLE = 0x04
 HOST_ID = 0xFD
 
+I2C_BUS = 7
+CALIBRATION_SAMPLES = 100
+READ_FREQUENCY = 100.0
+
 def _scale_to_u16(value, v_min, v_max):
     return int(65535.0 * (np.clip(value, v_min, v_max) - v_min) / (v_max - v_min))
 
@@ -82,129 +87,105 @@ def _flush_bus(bus):
 # ==========================================
 
 class BNO055_IMU:
-    """BNO055 IMU reader running in a background thread."""
-
-    def __init__(self, i2c_bus_num=7, calibration_samples=100, frequency=50.0):
+    def __init__(self, i2c_bus_num=I2C_BUS, calibration_samples=CALIBRATION_SAMPLES, frequency=READ_FREQUENCY):
         self.i2c_bus_num = i2c_bus_num
         self.calibration_samples = calibration_samples
         self.frequency = frequency
         self.sensor = None
-        self.offsets = {}
+        self.gyro_offset = np.zeros(3)
+        self.gravity_correction = None
         self.running = False
         self.thread = None
         self.lock = threading.Lock()
         self.latest_data = {
-            "gyro": np.zeros(3, dtype=np.float32),
-            "projected_gravity": np.array([0.0, 0.0, -1.0], dtype=np.float32),
+            "gyro": np.zeros(3),
+            "projected_gravity": np.array([0.0, 0.0, -1.0]),
         }
 
-    def _initialize_sensor(self):
+    def _init_sensor(self):
         from adafruit_extended_bus import ExtendedI2C as I2C
         import adafruit_bno055
-
         try:
             self.sensor = adafruit_bno055.BNO055_I2C(I2C(self.i2c_bus_num))
-            time.sleep(2)
+            time.sleep(1)
+            print(f"BNO055 detected on I2C bus {self.i2c_bus_num}")
             return True
         except Exception as e:
-            print(f"FATAL: Failed to initialize BNO055 IMU: {e}", file=sys.stderr)
+            print(f"FATAL: Could not initialize BNO055: {e}", file=sys.stderr)
             return False
 
     def calibrate(self):
-        if not self._initialize_sensor():
+        if not self._init_sensor():
             return False
-
-        from scipy.spatial.transform import Rotation
-
-        print("--- Starting IMU Calibration ---")
-        time.sleep(2)
-
-        gyro_data = []
-        gravity_data =[]
+        print(f"Calibrating IMU ({self.calibration_samples} samples) — keep still...")
+        time.sleep(1)
+        gyro_samples, gravity_samples = [],[]
+        
         for i in range(self.calibration_samples):
             gyro = self.sensor.gyro
             gravity = self.sensor.gravity
-            
-            # Ensure valid data without Nones
-            if (gyro is not None and gravity is not None and 
-                None not in gyro and None not in gravity):
-                gyro_data.append(gyro)
-                gravity_data.append(gravity)
-            sys.stdout.write(f"\rCollecting samples... {i + 1}/{self.calibration_samples}")
+            if gyro is not None and gravity is not None:
+                if None not in gyro and None not in gravity:
+                    gyro_samples.append(gyro)
+                    gravity_samples.append(gravity)
+            sys.stdout.write(f"\r  Sample {i + 1}/{self.calibration_samples}")
             sys.stdout.flush()
             time.sleep(0.05)
-
-        print("\n--- Calibration Calculations ---")
-
-        if not gyro_data or not gravity_data:
-            print("FATAL: No valid IMU data during calibration.", file=sys.stderr)
-            return False
-
-        try:
-            self.offsets["gyro"] = tuple(np.mean(gyro_data, axis=0))
-
-            avg_gravity = np.mean(np.array(gravity_data), axis=0)
-            at_rest = avg_gravity / np.linalg.norm(avg_gravity)
-            at_rest[2] = -at_rest[2]
-
-            ideal = np.array([0.0, 0.0, -1.0])
-            correction, _ = Rotation.align_vectors([ideal], [at_rest])
-            self.offsets["gravity_correction_rotation"] = correction
-
-            print(f"Gyro offset: {self.offsets['gyro']}")
-            print("--- Calibration Complete ---")
-            return True
-        except Exception as e:
-            print(f"FATAL: IMU calibration error: {e}", file=sys.stderr)
-            import traceback
-            traceback.print_exc()
-            return False
+        print()
+        
+        self.gyro_offset = np.mean(gyro_samples, axis=0)
+        
+        # --- FIX: Clean Gravity Calibration ---
+        avg_gravity = np.mean(gravity_samples, axis=0)
+        avg_gravity_norm = avg_gravity / np.linalg.norm(avg_gravity)
+        
+        # The sensor measures normal force (pointing UP). 
+        # MuJoCo expects gravity pointing DOWN. We negate it so it roughly points [0,0,-1]
+        base_grav = -avg_gravity_norm 
+        
+        # Find the small leveling rotation to make it exactly[0, 0, -1]
+        ideal_gravity = np.array([0.0, 0.0, -1.0])
+        self.gravity_correction, _ = Rotation.align_vectors([ideal_gravity], [base_grav])
+        
+        print(f"  Gyro offset : {np.array2string(self.gyro_offset, precision=4)}")
+        print("IMU calibration complete.\n")
+        return True
 
     def _read_loop(self):
         while self.running:
-            loop_start = time.time()
-            if self.sensor and "gyro" in self.offsets and "gravity_correction_rotation" in self.offsets:
-                try:
-                    raw_gyro = self.sensor.gyro
-                    gravity_vector = self.sensor.gravity
+            t0 = time.time()
+            try:
+                raw_gyro = self.sensor.gyro
+                raw_gravity = self.sensor.gravity
+                if raw_gyro is None or raw_gravity is None or None in raw_gyro or None in raw_gravity:
+                    continue
+                
+                # --- FIX: Just subtract offset, no arbitrary *-1 multipliers ---
+                gyro = np.array(raw_gyro) - self.gyro_offset
+                
+                # --- FIX: Clean Gravity Projection ---
+                grav = np.array(raw_gravity)
+                mag = np.linalg.norm(grav)
+                if mag > 1e-6:
+                    grav = -grav / mag  # Negate so it points down
+                else:
+                    grav = np.array([0.0, 0.0, -1.0])
                     
-                    # Check if the object is None, OR if it contains None values
-                    if raw_gyro is None or gravity_vector is None:
-                        continue
-                    if None in raw_gyro or None in gravity_vector:
-                        continue
-
-                    # 1. Calibrate raw gyro
-                    calibrated_gyro = np.array(raw_gyro) - np.array(self.offsets["gyro"])
-                    
-                    # 2. MATCH ROBOT_SENDER.PY AXES FLIP!
-                    calibrated_gyro[0] *= -1
-                    calibrated_gyro[1] *= -1
-
-                    # 3. Process Gravity 
-                    proj_grav = np.array(gravity_vector)
-                    magnitude = np.linalg.norm(proj_grav)
-                    if magnitude > 1e-6:
-                        proj_grav /= magnitude
-                    else:
-                        proj_grav = np.array([0.0, 0.0, 1.0])
-
-                    proj_grav[2] = -proj_grav[2]
-                    aligned = self.offsets["gravity_correction_rotation"].apply(proj_grav)
-                    aligned[0] *= -1
-                    aligned[1] *= -1
-
-                    with self.lock:
-                        # Save the fixed gyro
-                        self.latest_data["gyro"] = calibrated_gyro.astype(np.float32)
-                        self.latest_data["projected_gravity"] = aligned.astype(np.float32)
-                except Exception as e:
-                    print(f"IMU read error: {e}", file=sys.stderr)
-
-            elapsed = time.time() - loop_start
-            sleep_time = (1.0 / self.frequency) - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+                # Apply the leveling correction
+                grav = self.gravity_correction.apply(grav)
+                
+                with self.lock:
+                    self.latest_data["gyro"] = gyro
+                    self.latest_data["projected_gravity"] = grav
+            except Exception as e:
+                pass
+            
+            elapsed = time.time() - t0
+            sleep = (1.0 / self.frequency) - elapsed
+            if sleep > 0:
+                time.sleep(sleep)
+                
+    # ... (start, stop, get_data remain exactly the same) ...
 
     def start(self):
         if not self.calibrate():
@@ -268,7 +249,7 @@ JOINT_LIMITS = {
 }
 
 CAN_CHANNELS =["can2", "can1", "can0"]
-LPF_ALPHA = 1.0
+LPF_ALPHA = 0.1
 
 
 # ==========================================
