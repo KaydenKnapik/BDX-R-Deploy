@@ -255,28 +255,42 @@ LPF_ALPHA = 0.1
 # ==========================================
 # Hardware Backend
 # ==========================================
-
 class HardwareBackend(RobotBackend):
     def __init__(self, model_path: Path, loop_dt: float = 0.005,
-                 standup_duration: float = 2.0, i2c_bus: int = 7):
+                 standup_duration: float = 2.0, i2c_bus: int = 7,
+                 legs_only: bool = False):  # <--- NEW ARGUMENT
 
         self.cfg = load_policy_config(model_path)
         self.loop_dt = loop_dt
         self._running = True
         self._last_time = time.time()
+        self.legs_only = legs_only
 
         # Debug Freq Counters
         self._debug_tick_count = 0
         self._debug_start_time = time.time()
         self._actual_cmd_freq = 0.0
 
-        # --- NEW: Asimov Latency Tracking ---
+        # Asimov Latency Tracking
         self._cmd_sent_time = {}
         self._latencies = {}
 
-        self.num_joints = len(self.cfg.joint_names)
+        # --- NEW: Identify policy joints vs ALL physical joints ---
+        self.policy_joints = self.cfg.joint_names
+        self.num_policy_joints = len(self.policy_joints)
+        self.all_joint_names = list(self.policy_joints)
+
+        # If --legs is flagged, add the head joints so the backend powers them
+        if self.legs_only:
+            head_joints =["Neck_Pitch", "Head_Pitch", "Head_Yaw", "Head_Roll"]
+            for hj in head_joints:
+                if hj not in self.all_joint_names:
+                    self.all_joint_names.append(hj)
+
+        self.num_joints = len(self.all_joint_names)
+
         self._joint_wiring =[]
-        for name in self.cfg.joint_names:
+        for name in self.all_joint_names:
             name = name.strip()
             if name not in JOINT_WIRING:
                 raise ValueError(f"Policy joint '{name}' has no entry in JOINT_WIRING.")
@@ -285,7 +299,7 @@ class HardwareBackend(RobotBackend):
         self._motor_type_by_id = {}
         for bus_idx, motor_id, motor_type in self._joint_wiring:
             self._motor_type_by_id[motor_id] = motor_type
-            self._latencies[motor_id] =[] # Initialize latency list
+            self._latencies[motor_id] =[]
 
         print("Initializing CAN buses...")
         self.buses =[]
@@ -336,6 +350,7 @@ class HardwareBackend(RobotBackend):
         print("\nHardware backend ready.")
 
     def _shutdown_buses(self):
+        # ... (Identical to original) ...
         print("Disabling all motors...")
         disabled = set()
         for bus_idx, motor_id, _ in self._joint_wiring:
@@ -345,7 +360,7 @@ class HardwareBackend(RobotBackend):
                     self.buses[bus_idx].send(
                         can.Message(arbitration_id=disable_id, is_extended_id=True, dlc=8)
                     )
-                except Exception as e:
+                except Exception:
                     pass
                 disabled.add(motor_id)
 
@@ -354,24 +369,19 @@ class HardwareBackend(RobotBackend):
         print("CAN buses shut down.")
 
     def _update_motor_states(self):
+        # ... (Identical to original) ...
         for bus in self.buses:
             while True:
                 msg = bus.recv(timeout=0)
-                if msg is None:
-                    break
-                if msg.is_error_frame:
-                    continue
+                if msg is None: break
+                if msg.is_error_frame: continue
                 try:
                     motor_id = (msg.arbitration_id & 0xFF00) >> 8
                     msg_type = (msg.arbitration_id & 0x1F000000) >> 24
-                except Exception:
-                    continue
-                if msg_type != MotorMsg.Feedback.value:
-                    continue
-                if motor_id not in self._motor_states:
-                    continue
+                except Exception: continue
+                if msg_type != MotorMsg.Feedback.value: continue
+                if motor_id not in self._motor_states: continue
 
-                # --- NEW: Asimov Latency Calculation ---
                 now = time.perf_counter()
                 if motor_id in self._cmd_sent_time:
                     lat = now - self._cmd_sent_time[motor_id]
@@ -398,6 +408,7 @@ class HardwareBackend(RobotBackend):
                     pass
 
     def _read_and_filter(self):
+        # ... (Identical to original) ...
         self._update_motor_states()
 
         for i, (bus_idx, motor_id, _) in enumerate(self._joint_wiring):
@@ -405,34 +416,34 @@ class HardwareBackend(RobotBackend):
             raw_vel = self._motor_states[motor_id]["vel"]
 
             if self._initialized_filter:
-                self._filtered_positions[i] = (
-                    LPF_ALPHA * raw_pos + (1.0 - LPF_ALPHA) * self._filtered_positions[i]
-                )
-                self._filtered_velocities[i] = (
-                    LPF_ALPHA * raw_vel + (1.0 - LPF_ALPHA) * self._filtered_velocities[i]
-                )
+                self._filtered_positions[i] = (LPF_ALPHA * raw_pos + (1.0 - LPF_ALPHA) * self._filtered_positions[i])
+                self._filtered_velocities[i] = (LPF_ALPHA * raw_vel + (1.0 - LPF_ALPHA) * self._filtered_velocities[i])
             else:
                 self._filtered_positions[i] = raw_pos
                 self._filtered_velocities[i] = raw_vel
 
     def _send_targets(self, targets: np.ndarray, use_standup_gains: bool = False):
         for i, (bus_idx, motor_id, motor_type) in enumerate(self._joint_wiring):
-            name = self.cfg.joint_names[i].strip()
+            name = self.all_joint_names[i].strip()
             params = MOTOR_TYPE_PARAMS[motor_type]
 
-            if use_standup_gains and name in STANDUP_GAINS:
-                kp, kd = STANDUP_GAINS[name]
+            # Determine if this is a "headless" joint that the policy knows nothing about
+            is_fixed_head_joint = self.legs_only and i >= self.num_policy_joints
+
+            if use_standup_gains or is_fixed_head_joint:
+                if name in STANDUP_GAINS:
+                    kp, kd = STANDUP_GAINS[name]
+                else:
+                    kp, kd = 20.0, 1.0  # Safe fallback
             else:
                 kp = self.cfg.joint_stiffness[i]
                 kd = self.cfg.joint_damping[i]
 
+            pos = float(targets[i])
             if name in JOINT_LIMITS:
                 lo, hi = JOINT_LIMITS[name]
-                pos = float(np.clip(targets[i], lo, hi))
-            else:
-                pos = float(targets[i])
+                pos = float(np.clip(pos, lo, hi))
 
-            # --- NEW: Record send time for latency measurement ---
             self._cmd_sent_time[motor_id] = time.perf_counter()
 
             _send_mit_command(
@@ -448,7 +459,10 @@ class HardwareBackend(RobotBackend):
 
         self._read_and_filter()
         start_pos = self._filtered_positions.copy()
-        target_pos = np.array(self.cfg.default_joint_pos, dtype=np.float32)
+        
+        # Initialize full 14 joints to 0.0, then overwrite the policy joints with their default
+        target_pos = np.zeros(self.num_joints, dtype=np.float32)
+        target_pos[:self.num_policy_joints] = self.cfg.default_joint_pos
 
         num_steps = int(dur / 0.02)
         for step in range(num_steps + 1):
@@ -460,27 +474,22 @@ class HardwareBackend(RobotBackend):
         print("Standup complete.")
 
     def hold_standing_tick(self) -> None:
-        target_pos = np.array(self.cfg.default_joint_pos, dtype=np.float32)
+        target_pos = np.zeros(self.num_joints, dtype=np.float32)
+        target_pos[:self.num_policy_joints] = self.cfg.default_joint_pos
         self._read_and_filter()
         self._send_targets(target_pos, use_standup_gains=True)
         time.sleep(0.02)
 
     def activate_policy_gains(self) -> None:
-        # --- NEW: Flush "Ghost" commands and stale data ---
         print("\n[DEBUG] Activating Policy: Flushing CAN Bus to prevent cold-start jerk...")
         for bus in self.buses:
             _flush_bus(bus)
-        
-        # Read the exact current state and reset the filter so it doesn't try to blend history
         self._read_and_filter()
         print("[DEBUG] Hardware buffers flushed.")
 
-    def get_imu_angular_velocity(self) -> np.ndarray:
-        return self.imu.get_latest_data()["gyro"]
-
-    def get_projected_gravity(self) -> np.ndarray:
-        return self.imu.get_latest_data()["projected_gravity"]
-
+    def get_imu_angular_velocity(self) -> np.ndarray: return self.imu.get_latest_data()["gyro"]
+    def get_projected_gravity(self) -> np.ndarray: return self.imu.get_latest_data()["projected_gravity"]
+    
     def get_joint_positions(self, joint_ids: np.ndarray) -> np.ndarray:
         self._read_and_filter()
         return self._filtered_positions[joint_ids].copy()
@@ -507,26 +516,20 @@ class HardwareBackend(RobotBackend):
             self._debug_tick_count = 0
             self._debug_start_time = now
 
-    def is_running(self) -> bool:
-        return self._running
+    def is_running(self) -> bool: return self._running
 
     def get_joint_map(self, joint_names: list[str]) -> np.ndarray:
-        return np.arange(len(joint_names), dtype=int)
+        # Maps the policy's requested joints into our backend's internal list
+        return np.array([self.all_joint_names.index(n) for n in joint_names], dtype=int)
 
     def get_default_pos_array(self, num_actuators: int) -> np.ndarray:
-        return np.zeros(num_actuators, dtype=np.float32)
+        # Even if the policy only asks for 10 joints, return the full 14 array size so the runner pads it for us
+        return np.zeros(self.num_joints, dtype=np.float32)
 
-    def get_actual_frequency(self) -> float:
-        return self._actual_cmd_freq
-    
-    # --- NEW: Get CAN Latency Stats ---
+    def get_actual_frequency(self) -> float: return self._actual_cmd_freq
     def get_latency_stats(self):
         stats = {}
         for mid, lats in self._latencies.items():
             if len(lats) > 0:
-                stats[mid] = {
-                    "avg": np.mean(lats) * 1000.0,
-                    "max": np.max(lats) * 1000.0,
-                    "std": np.std(lats) * 1000.0
-                }
+                stats[mid] = {"avg": np.mean(lats)*1000.0, "max": np.max(lats)*1000.0, "std": np.std(lats)*1000.0}
         return stats
