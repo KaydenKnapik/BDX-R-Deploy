@@ -127,7 +127,36 @@ class RobotBackend(ABC):
     @abstractmethod
     def activate_policy_gains(self) -> None: ...
 
+# ==========================================
+# Policy Inference Adapters
+# ==========================================
+class BasePolicyBackend(ABC):
+    @abstractmethod
+    def get_action(self, obs: np.ndarray) -> np.ndarray:
+        pass
 
+class OnnxPolicyBackend(BasePolicyBackend):
+    def __init__(self, model_path: Path):
+        self.session = ort.InferenceSession(str(model_path))
+        self.input_name = self.session.get_inputs()[0].name
+
+    def get_action(self, obs: np.ndarray) -> np.ndarray:
+        return self.session.run(None, {self.input_name: obs.reshape(1, -1)})[0][0]
+
+class PyTorchPolicyBackend(BasePolicyBackend):
+    def __init__(self, model_path: Path):
+        import torch
+        # Load the PyTorch JIT model
+        self.model = torch.jit.load(str(model_path))
+        self.model.eval()
+
+    def get_action(self, obs: np.ndarray) -> np.ndarray:
+        import torch
+        with torch.no_grad():
+            obs_tensor = torch.tensor(obs.reshape(1, -1), dtype=torch.float32)
+            action = self.model(obs_tensor)
+            return action.numpy()[0]
+        
 # ==========================================
 # Policy Runner
 # ==========================================
@@ -135,8 +164,15 @@ class PolicyRunner:
     def __init__(self, backend: RobotBackend, model_path: Path, decimation: int = 4):
         self.backend = backend
         self.cfg: RobotPolicyConfig = load_policy_config(model_path)
-        self.session = ort.InferenceSession(str(model_path))
-        self.input_name = self.session.get_inputs()[0].name
+        
+        # --- NEW: Automatically pick ONNX or PyTorch adapter ---
+        if model_path.suffix == '.onnx':
+            self.model = OnnxPolicyBackend(model_path)
+        elif model_path.suffix == '.pt':
+            self.model = PyTorchPolicyBackend(model_path)
+        else:
+            raise ValueError("Model must be .onnx or .pt")
+
         self.decimation = decimation
 
         self.joint_map = backend.get_joint_map(self.cfg.joint_names)
@@ -149,7 +185,6 @@ class PolicyRunner:
 
         self.action_scale = np.array(self.cfg.action_scale, dtype=np.float32)
         
-        # --- NEW: Interpolation Variables ---
         self.new_actions = np.zeros(len(self.cfg.joint_names), dtype=np.float32)
         self.prev_actions = np.zeros(len(self.cfg.joint_names), dtype=np.float32)
         self.current_interpolated_actions = np.zeros(len(self.cfg.joint_names), dtype=np.float32)
@@ -160,6 +195,7 @@ class PolicyRunner:
         self.logger = RuntimeLogger(joint_names=self.cfg.joint_names)
         self._interrupted = False
         self._sigint_count = 0
+
 
     def _handle_sigint(self, signum, frame):
         self._sigint_count += 1
@@ -226,18 +262,24 @@ class PolicyRunner:
                 obs_parts =[]
                 for term in self.cfg.observation_names:
                     term = term.strip()
-                    if term == "projected_gravity": obs_parts.append(projected_gravity)
-                    elif term == "base_ang_vel": obs_parts.append(ang_vel)
-                    elif term in ("joint_pos", "dof_pos"): obs_parts.append(dof_pos - self.default_pos[self.joint_map])
-                    elif term in ("joint_vel", "dof_vel"): obs_parts.append(dof_vel)
-                    elif term == "actions": obs_parts.append(self.new_actions)
-                    elif term in ("command", "commands"): obs_parts.append(cmd)
+                    # --- NEW: Fetch the scale for this observation, default to 1.0 ---
+                    scale = self.cfg.obs_scales.get(term, 1.0)
+
+                    # --- NEW: Apply the scale to each append! ---
+                    if term == "projected_gravity": obs_parts.append(projected_gravity * scale)
+                    elif term == "base_ang_vel": obs_parts.append(ang_vel * scale)
+                    elif term in ("joint_pos", "dof_pos"): obs_parts.append((dof_pos - self.default_pos[self.joint_map]) * scale)
+                    elif term in ("joint_vel", "dof_vel"): obs_parts.append(dof_vel * scale)
+                    elif term == "actions": obs_parts.append(self.prev_actions * scale) # NOTE: use prev_actions for history, Isaac usually wants history, not current 0s
+                    elif term in ("command", "commands"): obs_parts.append(cmd * scale)
 
                 obs = np.concatenate(obs_parts).astype(np.float32)
 
                 # Store old actions and predict new ones
                 self.prev_actions = self.new_actions.copy()
-                self.new_actions = self.session.run(None, {self.input_name: obs.reshape(1, -1)})[0][0]
+                
+                # --- NEW: Use the adapter for inference ---
+                self.new_actions = self.model.get_action(obs)
                 
                 policy_ticks += 1
 

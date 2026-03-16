@@ -1,0 +1,96 @@
+# ==========================================
+# IsaacLab Sidecar Configuration for BDX-R
+# ==========================================
+# File: models/policy.yaml
+
+obs_dim: 39      # 3 (gyro) + 3 (grav) + 10 (pos) + 10 (vel) + 10 (actions) + 3 (cmds)
+action_dim: 10   # 10 leg joints
+
+# The exact joint order IsaacLab expects ("left hip yaw, right hip yaw down to ankles")
+joint_names:
+  - Left_Hip_Yaw
+  - Right_Hip_Yaw
+  - Left_Hip_Roll
+  - Right_Hip_Roll
+  - Left_Hip_Pitch
+  - Right_Hip_Pitch
+  - Left_Knee
+  - Right_Knee
+  - Left_Ankle
+  - Right_Ankle
+
+# Kp Gains mapped directly from your IsaacLab snippet
+joint_stiffness:
+  - 78.957  # Left_Hip_Yaw
+  - 78.957  # Right_Hip_Yaw
+  - 78.957  # Left_Hip_Roll
+  - 78.957  # Right_Hip_Roll
+  - 78.957  # Left_Hip_Pitch
+  - 78.957  # Right_Hip_Pitch
+  - 78.957  # Left_Knee
+  - 78.957  # Right_Knee
+  - 16.581  # Left_Ankle
+  - 16.581  # Right_Ankle
+
+# Kd Gains mapped directly from your IsaacLab snippet
+joint_damping:
+  - 5.027  # Left_Hip_Yaw
+  - 5.027  # Right_Hip_Yaw
+  - 5.027  # Left_Hip_Roll
+  - 5.027  # Right_Hip_Roll
+  - 5.027  # Left_Hip_Pitch
+  - 5.027  # Right_Hip_Pitch
+  - 5.027  # Left_Knee
+  - 5.027  # Right_Knee
+  - 1.056  # Left_Ankle
+  - 1.056  # Right_Ankle
+
+# Ensure these match the nominal/default stance used in IsaacLab! 
+# (Set to 0.0 assuming your IsaacLab uses 0.0 as the nominal offset)
+default_joint_pos:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+
+# If IsaacLab uses an action scale (like 0.5 or 1.0), define it here.
+# Assuming 1.0 since it wasn't specified in your observation snippet.
+action_scale:
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+
+# The order the network expects the observations to be concatenated.
+# I matched these names to the strings checked inside your PolicyRunner.
+observation_names:
+  - base_ang_vel          # Corresponds to imu_ang_vel
+  - projected_gravity     # Corresponds to imu_projected_gravity
+  - joint_pos             # Corresponds to joint_pos
+  - joint_vel             # Corresponds to joint_vel
+  - actions               # Corresponds to actions
+  - commands              # Corresponds to velocity_commands
+
+# Specific scales defined in your IsaacLab configuration snippet
+obs_scales:
+  base_ang_vel: 0.2
+  joint_vel: 0.05
+  # The others (projected_gravity, joint_pos, actions, commands) default to 1.0 
+  # inside the Python loop because you didn't have scales for them in IsaacLab.
+
+command_names:
+  - lin_vel_x
+  - lin_vel_y
+  - ang_vel_z
