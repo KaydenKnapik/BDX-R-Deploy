@@ -22,7 +22,9 @@ SEQUENTIAL_NAMES =[
 # --- TRAJECTORY SHAPING (Sequential: Left Leg, then Right Leg) ---
 BIAS = np.zeros(10)
 SCALE = np.array([0.15, 0.15, 0.25, 0.3, 0.4,   0.15, 0.15, 0.25, 0.3, 0.4])
-DIR = np.array([1.0, 1.0, 1.0, -1.0, 1.0,   -1.0, -1.0, 1.0, -1.0, 1.0])
+#SCALE = np.array([0.1, 0.1, 0.1, 0.1, 0.15,   0.1, 0.1, 0.1, 0.1, 0.15,])
+#DIR = np.array([1.0, 1.0, 1.0, -1.0, 1.0,   -1.0, -1.0, 1.0, -1.0, 1.0])
+DIR = np.array([1.0, 1.0,  1.0, -1.0,  1.0,       -1.0, -1.0, -1.0,  1.0, -1.0])
 
 HARDCODED_KP = np.array([
     78.957, 78.957, 78.957, 78.957, 16.581,  # Left Leg Gains
